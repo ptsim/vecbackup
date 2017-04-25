@@ -1,0 +1,11 @@
+{
+	"ImportPath": "ptsim/vecbackup",
+	"GoVersion": "go1.7",
+	"GodepVersion": "v79",
+	"Deps": [
+		{
+			"ImportPath": "golang.org/x/crypto/pbkdf2",
+			"Rev": "728b753d0135da6801d45a38e6f43ff55779c5c2"
+		}
+	]
+}
