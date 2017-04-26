@@ -987,7 +987,7 @@ func doPurgeOldData(conf *config, bkDir string) error {
 
 func usageAndExit() {
 	fmt.Fprintf(os.Stderr, `Usage:
-  vecbackup [-pw <password>] init <backupdir>
+  vecbackup init [-pw <password>] <backupdir>
     Initialize a new backup directory.
 
   vecbackup backup [-v] [-cs] [-n] [-setversion <version>] [-pw <password>] <srcdir> <backupdir> [<subpath> ...]
@@ -1027,7 +1027,7 @@ func usageAndExit() {
 
   vecbackup delete-old-versions [-n] [-pw <password>] <backupdir>
     Deletes old versions. No chunks are deleted.
-    Keeps all versions wihin one day, one version per hour for the last week,
+    Keeps all versions within one day, one version per hour for the last week,
     one version per day in the last month, one version per week in the last 
     year and one version per month otherwise.
       -n            dry run, show versions that would have been deleted
