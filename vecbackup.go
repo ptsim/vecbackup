@@ -987,10 +987,10 @@ func doPurgeOldData(conf *config, bkDir string) error {
 
 func usageAndExit() {
 	fmt.Fprintf(os.Stderr, `Usage:
-  vecbackup init [-pw <password>] <backupdir>
+  vecbackup init [-pw <pwfile>] <backupdir>
     Initialize a new backup directory.
 
-  vecbackup backup [-v] [-cs] [-n] [-setversion <version>] [-pw <password>] <srcdir> <backupdir> [<subpath> ...]
+  vecbackup backup [-v] [-cs] [-n] [-setversion <version>] [-pw <pwfile>] <srcdir> <backupdir> [<subpath> ...]
     Incrementally and recursively backs up the files, directories and symbolic
     links (items) in <srcdir> to <backupdir>. If one or more <subpath> are
     specified, only backup those subpaths. <subpaths> are relative to <srcdir>.
@@ -1002,15 +1002,15 @@ func usageAndExit() {
       -n            dry run, show what would have been backed up
       -setversion   save as the given version, instead of the current time
 
-  vecbackup versions [-pw <password>] <backupdir>
+  vecbackup versions [-pw <pwfile>] <backupdir>
     Lists all backup versions in chronological order. The version name is a
     timestamp in UTC formatted with RFC3339Nano format (YYYY-MM-DDThh:mm:ssZ).
 
-  vecbackup files [-version <version>] [-pw <password>] <backupdir>
+  vecbackup files [-version <version>] [-pw <pwfile>] <backupdir>
     Lists files in <backupdir>.
     -version <version>   list the files in that version
 
-  vecbackup recover [-n] [-t] [-version <version>] [-merge] [-pw <password>] <backupdir> <recoverydir> [<subpath> ...]
+  vecbackup recover [-n] [-t] [-version <version>] [-merge] [-pw <pwfile>] <backupdir> <recoverydir> [<subpath> ...]
     Recovers all the items or the given <subpaths> to <recoverydir>.
     <recoverydir> must not already exist.
       -n            dry run, show what would have been recovered
@@ -1022,21 +1022,21 @@ func usageAndExit() {
                     are not extracted again. This can be used to resume
                     a previous recover operation.
 
-  vecbackup delete-version [-pw <password>] <backupdir> <version>
+  vecbackup delete-version [-pw <pwfile>] <backupdir> <version>
     Deletes the given version. No chunks are deleted.
 
-  vecbackup delete-old-versions [-n] [-pw <password>] <backupdir>
+  vecbackup delete-old-versions [-n] [-pw <pwfile>] <backupdir>
     Deletes old versions. No chunks are deleted.
     Keeps all versions within one day, one version per hour for the last week,
     one version per day in the last month, one version per week in the last 
     year and one version per month otherwise.
       -n            dry run, show versions that would have been deleted
 
-  vecbackup verify-backups [-pw <password>] <backupdir>
+  vecbackup verify-backups [-pw <pwfile>] <backupdir>
     Verifies that all the chunks used by all the files in all versions
     can be read and match their checksums.
 
-  vecbackup purge-old-data [-pw <password>] <backupdir>
+  vecbackup purge-old-data [-pw <pwfile>] <backupdir>
     Deletes chunks that are not used by any file in any backup version.
 
 Other common flags:
