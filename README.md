@@ -132,7 +132,7 @@ Tested with Golang 1.7 on OSX 10.11.6 and Raspian on Raspberry Pi Model B 256MB.
 * **```vecbackup init -pw``` generates and stores a random key in ```vecbackup-enc-config``` in the backup directory.**
 * **Chunks and version files are encrypted using that key.**
 * **```vecbackup-enc-config``` is encrypted using your password.**
-* **If you lose the ```vecbackup-enc-config``` file, there is no way to recover the data.```
+* **If you lose the ```vecbackup-enc-config``` file, there is no way to recover the data.
 
 ### Q: How do I tell vecbackup to skip (ignore) certain files?
 * Create a file named ```vecbackup-ignore``` in the backup directory after running ```vecbackup init```.
