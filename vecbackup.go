@@ -20,8 +20,6 @@ import (
 )
 
 const (
-	MAGIC                   = "PTVBK"
-	BKVERSION               = 1
 	DEFAULT_CHUNK_SIZE      = 16 * 1024 * 1024
 	CHUNK_DIR_DEPTH         = 3
 	VERSION_FILENAME_PREFIX = "vecbackup-version-"
@@ -30,7 +28,6 @@ const (
 	TEMP_FILE_SUFFIX        = "-temp"
 	CHUNK_DIR               = "chunks"
 	VERSIONS_DIR            = "versions"
-	DELETED_PREFIX          = "DELETED-"
 	DEFAULT_DIR_PERM        = 0777
 	DEFAULT_FILE_PERM       = 0666
 	PATH_SEP                = string(os.PathSeparator)
@@ -618,15 +615,19 @@ func verifyChunks(cm ChunkMgr, buf *Buf, counts map[string]int) (numChunks, numO
 
 //---------------------------------------------------------------------------
 
-func setup(bkDir string, pwFile string) (string, VersionMgr, ChunkMgr, error) {
+func setup(bkDir string, pwFile string) (string, VersionMgr, ChunkMgr, *Config, error) {
 	bkDir = filepath.Clean(bkDir)
 	key, err := GetKey(pwFile, bkDir)
 	if err != nil {
-		return bkDir, nil, nil, err
+		return bkDir, nil, nil, nil, err
 	}
 	vm := MakeVersionMgr(bkDir, key)
 	cm := MakeChunkMgr(bkDir, key)
-	return bkDir, vm, cm, nil
+	cfg, err := LoadConfig(bkDir, key)
+	if err != nil {
+		return bkDir, nil, nil, nil, err
+	}
+	return bkDir, vm, cm, cfg, nil
 }
 
 func writeLockfile(bkDir string) (string, error) {
@@ -647,7 +648,7 @@ func removeLockfile(lfn string) {
 
 //---------------------------------------------------------------------------
 
-func doInit(conf *config, bkDir string) error {
+func doInit(flags *Flags, bkDir string) error {
 	bkDir = filepath.Clean(bkDir)
 	if nodeExists(bkDir) {
 		return errors.New(fmt.Sprintf("Backup directory already exist: %s", bkDir))
@@ -664,11 +665,18 @@ func doInit(conf *config, bkDir string) error {
 	if err != nil {
 		return errors.New(fmt.Sprintf("Cannot create backup dir: %s", err))
 	}
-	return WriteNewEncConfig(conf.pwFile, bkDir)
+	err = WriteNewEncConfig(flags.pwFile, bkDir)
+	if err != nil {
+		return errors.New(fmt.Sprintf("Cannot write encypted config file: %s", err))
+	}
+	key, err := GetKey(flags.pwFile, bkDir)
+	cfg := MakeConfig(flags.chunkSize)
+	err = SaveConfig(cfg, bkDir, key)
+	return err
 }
 
-func doBackup(conf *config, src, bkDir string, subpaths []string) error {
-	bkDir, vm, cm, err := setup(bkDir, conf.pwFile)
+func doBackup(flags *Flags, src, bkDir string, subpaths []string) error {
+	bkDir, vm, cm, cfg, err := setup(bkDir, flags.pwFile)
 	if err != nil {
 		return err
 	}
@@ -682,13 +690,11 @@ func doBackup(conf *config, src, bkDir string, subpaths []string) error {
 	if err != nil && !os.IsNotExist(err) {
 		return errors.New(fmt.Sprintf("Cannot read version files: %s", err))
 	}
-	var header *Header
 	var vfr FReader
 	if v == "" {
-		header = &Header{MAGIC, BKVERSION, conf.defaultChunkSize}
 		vfr = &NullFReader{}
 	} else {
-		header, vfr, err = vm.LoadVersion(v)
+		vfr, err = vm.LoadVersion(v)
 		if err != nil {
 			return errors.New(fmt.Sprintf("Cannot read version file: %s", err))
 		}
@@ -702,12 +708,12 @@ func doBackup(conf *config, src, bkDir string, subpaths []string) error {
 		return err
 	}
 	var fw FWriter
-	if !conf.dryRun {
+	if !flags.dryRun {
 		var t time.Time
-		if conf.setVersion != "" {
-			t2, err := time.Parse(time.RFC3339Nano, conf.setVersion)
+		if flags.setVersion != "" {
+			t2, err := time.Parse(time.RFC3339Nano, flags.setVersion)
 			if err != nil {
-				return errors.New(fmt.Sprintf("Invalid version %s", conf.version))
+				return errors.New(fmt.Sprintf("Invalid version %s", flags.version))
 			}
 			t = t2
 		} else {
@@ -718,7 +724,7 @@ func doBackup(conf *config, src, bkDir string, subpaths []string) error {
 				t = time.Now()
 			}
 		}
-		fw, err = vm.SaveVersion(t, header)
+		fw, err = vm.SaveVersion(t)
 		if err != nil {
 			return err
 		}
@@ -727,7 +733,7 @@ func doBackup(conf *config, src, bkDir string, subpaths []string) error {
 	}
 	buf := &Buf{}
 	if err2 := mergeFileDataStream(vfr, sfr, func(saved, scanned *FileData) bool {
-		err = backupOneFile(cm, src, header.ChunkSize, conf.dryRun, conf.checksum, conf.verbose, buf, fw, conf.out, saved, scanned)
+		err = backupOneFile(cm, src, cfg.ChunkSize, flags.dryRun, flags.checksum, flags.verbose, buf, fw, flags.out, saved, scanned)
 		return err != nil
 	}); err2 != nil && err == nil {
 		err = err2
@@ -745,26 +751,26 @@ func doBackup(conf *config, src, bkDir string, subpaths []string) error {
 	return fw.Close()
 }
 
-func doRecover(conf *config, bkDir, recDir string, patterns []string) error {
-	bkDir, vm, cm, err := setup(bkDir, conf.pwFile)
+func doRecover(flags *Flags, bkDir, recDir string, patterns []string) error {
+	bkDir, vm, cm, _, err := setup(bkDir, flags.pwFile)
 	if err != nil {
 		return err
 	}
 	recDir = filepath.Clean(recDir)
-	if nodeExists(recDir) && !conf.merge {
+	if nodeExists(recDir) && !flags.merge {
 		return errors.New(fmt.Sprintf("Recovery dir %s already exists", recDir))
 	}
-	v, err := vm.GetVersion(conf.version)
+	v, err := vm.GetVersion(flags.version)
 	if err != nil {
 		return errors.New(fmt.Sprintf("Cannot read version files: %s", err))
 	} else if v == "" {
 		return errors.New("Backup is empty")
 	}
-	_, fr, err := vm.LoadVersion(v)
+	fr, err := vm.LoadVersion(v)
 	if err != nil {
 		return errors.New(fmt.Sprintf("Cannot read version file: %s", err))
 	}
-	if !conf.testRun && !conf.dryRun {
+	if !flags.testRun && !flags.dryRun {
 		os.MkdirAll(recDir, DEFAULT_DIR_PERM)
 	}
 	buf := &Buf{}
@@ -773,11 +779,11 @@ func doRecover(conf *config, bkDir, recDir string, patterns []string) error {
 	for fd, err = fr.Next(); err == nil; fd, err = fr.Next() {
 		if matchRecoveryPatterns(fd.Name, patterns) {
 			var err2 error
-			if !conf.dryRun {
-				err2 = recoverNode(fd, cm, recDir, conf.testRun, conf.merge, buf)
+			if !flags.dryRun {
+				err2 = recoverNode(fd, cm, recDir, flags.testRun, flags.merge, buf)
 			}
 			if err2 == nil {
-				fmt.Fprintf(conf.out, "%s\n", fd.PrettyPrint())
+				fmt.Fprintf(flags.out, "%s\n", fd.PrettyPrint())
 			} else {
 				debugP("Cannot recover file %s: %s\n", fd.PrettyPrint(), err)
 				fmt.Fprintf(os.Stderr, "Failed: %s\n", fd.PrettyPrint())
@@ -798,24 +804,24 @@ func doRecover(conf *config, bkDir, recDir string, patterns []string) error {
 	return nil
 }
 
-func doFiles(conf *config, bkDir string) error {
-	bkDir, vm, _, err := setup(bkDir, conf.pwFile)
+func doFiles(flags *Flags, bkDir string) error {
+	bkDir, vm, _, _, err := setup(bkDir, flags.pwFile)
 	if err != nil {
 		return err
 	}
-	v, err := vm.GetVersion(conf.version)
+	v, err := vm.GetVersion(flags.version)
 	if err != nil {
 		return errors.New(fmt.Sprintf("Cannot read version files: %s", err))
 	} else if v == "" {
 		return errors.New("Backup is empty")
 	}
-	_, fr, err := vm.LoadVersion(v)
+	fr, err := vm.LoadVersion(v)
 	if err != nil {
 		return errors.New(fmt.Sprintf("Cannot read version file: %s", err))
 	}
 	var fd *FileData
 	for fd, err = fr.Next(); err == nil; fd, err = fr.Next() {
-		fmt.Fprintf(conf.out, "%s\n", fd.PrettyPrint())
+		fmt.Fprintf(flags.out, "%s\n", fd.PrettyPrint())
 	}
 	if isError(err) {
 		fr.Close()
@@ -827,8 +833,8 @@ func doFiles(conf *config, bkDir string) error {
 	return nil
 }
 
-func doVersions(conf *config, bkDir string) error {
-	bkDir, vm, _, err := setup(bkDir, conf.pwFile)
+func doVersions(flags *Flags, bkDir string) error {
+	bkDir, vm, _, _, err := setup(bkDir, flags.pwFile)
 	if err != nil {
 		return err
 	}
@@ -837,13 +843,13 @@ func doVersions(conf *config, bkDir string) error {
 		return errors.New(fmt.Sprintf("Cannot read version files: %s", err))
 	}
 	for _, v := range versions {
-		fmt.Fprintf(conf.out, "%s\n", v)
+		fmt.Fprintf(flags.out, "%s\n", v)
 	}
 	return nil
 }
 
-func doDeleteVersion(conf *config, bkDir, v string) error {
-	bkDir, vm, _, err := setup(bkDir, conf.pwFile)
+func doDeleteVersion(flags *Flags, bkDir, v string) error {
+	bkDir, vm, _, _, err := setup(bkDir, flags.pwFile)
 	if err != nil {
 		return err
 	}
@@ -854,8 +860,8 @@ func doDeleteVersion(conf *config, bkDir, v string) error {
 	return nil
 }
 
-func doDeleteOldVersions(conf *config, bkDir string) error {
-	bkDir, vm, _, err := setup(bkDir, conf.pwFile)
+func doDeleteOldVersions(flags *Flags, bkDir string) error {
+	bkDir, vm, _, _, err := setup(bkDir, flags.pwFile)
 	if err != nil {
 		return err
 	}
@@ -865,8 +871,8 @@ func doDeleteOldVersions(conf *config, bkDir string) error {
 	}
 	d := ReduceVersions(time.Now(), versions)
 	for _, v := range d {
-		fmt.Fprintf(conf.out, "Deleting version %s\n", v)
-		if !conf.dryRun {
+		fmt.Fprintf(flags.out, "Deleting version %s\n", v)
+		if !flags.dryRun {
 			err = vm.DeleteVersion(v)
 			if err != nil {
 				return errors.New(fmt.Sprintf("Cannot delete version %s: %s", v, err))
@@ -880,8 +886,8 @@ type verifyBackupResults struct {
 	numChunks, numOk, numFailed, numUnused int
 }
 
-func doVerifyBackups(conf *config, bkDir string, r *verifyBackupResults) error {
-	bkDir, vm, cm, err := setup(bkDir, conf.pwFile)
+func doVerifyBackups(flags *Flags, bkDir string, r *verifyBackupResults) error {
+	bkDir, vm, cm, _, err := setup(bkDir, flags.pwFile)
 	if err != nil {
 		return err
 	}
@@ -891,7 +897,7 @@ func doVerifyBackups(conf *config, bkDir string, r *verifyBackupResults) error {
 	}
 	counts := cm.GetAllChunks()
 	for _, v := range versions {
-		_, fr, err := vm.LoadVersion(v)
+		fr, err := vm.LoadVersion(v)
 		if err != nil {
 			return errors.New(fmt.Sprintf("Cannot read version file: %s", err))
 		}
@@ -911,7 +917,7 @@ func doVerifyBackups(conf *config, bkDir string, r *verifyBackupResults) error {
 	}
 	buf := &Buf{}
 	numChunks, numOk, numFailed, numUnused := verifyChunks(cm, buf, counts)
-	fmt.Fprintf(conf.out, "%d chunks, %d ok, %d failed, %d unused\n", numChunks, numOk, numFailed, numUnused)
+	fmt.Fprintf(flags.out, "%d chunks, %d ok, %d failed, %d unused\n", numChunks, numOk, numFailed, numUnused)
 	if r != nil {
 		r.numChunks = numChunks
 		r.numOk = numOk
@@ -921,8 +927,8 @@ func doVerifyBackups(conf *config, bkDir string, r *verifyBackupResults) error {
 	return nil
 }
 
-func doPurgeOldData(conf *config, bkDir string) error {
-	bkDir, vm, cm, err := setup(bkDir, conf.pwFile)
+func doPurgeOldData(flags *Flags, bkDir string) error {
+	bkDir, vm, cm, _, err := setup(bkDir, flags.pwFile)
 	if err != nil {
 		return err
 	}
@@ -932,7 +938,7 @@ func doPurgeOldData(conf *config, bkDir string) error {
 	}
 	counts := cm.GetAllChunks()
 	for _, v := range versions {
-		_, fr, err := vm.LoadVersion(v)
+		fr, err := vm.LoadVersion(v)
 		if err != nil {
 			return errors.New(fmt.Sprintf("Cannot read version file: %s", err))
 		}
@@ -976,7 +982,7 @@ func doPurgeOldData(conf *config, bkDir string) error {
 			return "s"
 		}
 	}
-	fmt.Fprintf(conf.out, "Deleted %d chunk%s (%d bytes).\n", numDeleted, notOne(numDeleted), sizeDeleted)
+	fmt.Fprintf(flags.out, "Deleted %d chunk%s (%d bytes).\n", numDeleted, notOne(numDeleted), sizeDeleted)
 	if numFailed > 0 {
 		return errors.New(fmt.Sprintf("Failed to delete %d chunk%s (%d bytes).", numFailed, notOne(numFailed), sizeFailed))
 	}
@@ -987,7 +993,8 @@ func doPurgeOldData(conf *config, bkDir string) error {
 
 func usageAndExit() {
 	fmt.Fprintf(os.Stderr, `Usage:
-  vecbackup init [-pw <pwfile>] <backupdir>
+  vecbackup init [-pw <pwfile>] [-chunksize size] <backupdir>
+      -chunksize    files are broken into chunks of this size.
     Initialize a new backup directory.
 
   vecbackup backup [-v] [-cs] [-n] [-setversion <version>] [-pw <pwfile>] <srcdir> <backupdir> [<subpath> ...]
@@ -1001,7 +1008,6 @@ func usageAndExit() {
       -cs           use checksums to detect if files have changed
       -n            dry run, show what would have been backed up
       -setversion   save as the given version, instead of the current time
-
   vecbackup versions [-pw <pwfile>] <backupdir>
     Lists all backup versions in chronological order. The version name is a
     timestamp in UTC formatted with RFC3339Nano format (YYYY-MM-DDThh:mm:ssZ).
@@ -1067,33 +1073,33 @@ var debugF = flag.Bool("debug", false, "Show debug info.")
 var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 var memprofile = flag.String("memprofile", "", "write memory profile to `file`")
 
-type config struct {
-	verbose          bool
-	checksum         bool
-	dryRun           bool
-	testRun          bool
-	setVersion       string
-	version          string
-	merge            bool
-	pwFile           string
-	out              io.Writer
-	defaultChunkSize int
+type Flags struct {
+	verbose    bool
+	checksum   bool
+	dryRun     bool
+	testRun    bool
+	setVersion string
+	version    string
+	merge      bool
+	pwFile     string
+	out        io.Writer
+	chunkSize  int
 }
 
-func InitConfig() *config {
-	conf := &config{}
-	flag.BoolVar(&conf.verbose, "v", false, "Verbose")
-	flag.BoolVar(&conf.checksum, "cs", false, "Use checksums to check if file contents have changed.")
-	flag.BoolVar(&conf.dryRun, "n", false, "Dry run.")
-	flag.BoolVar(&conf.testRun, "t", false, "Test run.")
-	flag.StringVar(&conf.version, "version", "latest", `The version to operate on or the special keyword "latest".`)
-	flag.StringVar(&conf.setVersion, "setversion", "", "Set to this version instead of using the current time.")
-	flag.BoolVar(&conf.merge, "merge", false, "Merge into existing directory.")
-	flag.StringVar(&conf.pwFile, "pw", "", "File containing password")
-	conf.out = os.Stdout
-	conf.defaultChunkSize = DEFAULT_CHUNK_SIZE
+func InitFlags() *Flags {
+	flags := &Flags{}
+	flag.BoolVar(&flags.verbose, "v", false, "Verbose")
+	flag.BoolVar(&flags.checksum, "cs", false, "Use checksums to check if file contents have changed.")
+	flag.BoolVar(&flags.dryRun, "n", false, "Dry run.")
+	flag.BoolVar(&flags.testRun, "t", false, "Test run.")
+	flag.StringVar(&flags.version, "version", "latest", `The version to operate on or the special keyword "latest".`)
+	flag.StringVar(&flags.setVersion, "setversion", "", "Set to this version instead of using the current time.")
+	flag.BoolVar(&flags.merge, "merge", false, "Merge into existing directory.")
+	flag.StringVar(&flags.pwFile, "pw", "", "File containing password")
+	flags.out = os.Stdout
+	flag.IntVar(&flags.chunkSize, "chunksize", DEFAULT_CHUNK_SIZE, "Chunk size")
 	log.SetFlags(0)
-	return conf
+	return flags
 }
 
 func debugP(fmt string, v ...interface{}) {
@@ -1110,7 +1116,7 @@ func exitIfError(err error) {
 }
 
 func main() {
-	conf := InitConfig()
+	flags := InitFlags()
 	if len(os.Args) < 2 {
 		usageAndExit()
 	}
@@ -1129,47 +1135,47 @@ func main() {
 		if flag.NArg() < 1 {
 			usageAndExit()
 		}
-		exitIfError(doInit(conf, flag.Arg(0)))
+		exitIfError(doInit(flags, flag.Arg(0)))
 	} else if cmd == "backup" {
 		if flag.NArg() < 2 {
 			usageAndExit()
 		}
-		exitIfError(doBackup(conf, flag.Arg(0), flag.Arg(1), flag.Args()[2:]))
+		exitIfError(doBackup(flags, flag.Arg(0), flag.Arg(1), flag.Args()[2:]))
 	} else if cmd == "files" {
 		if flag.NArg() != 1 {
 			usageAndExit()
 		}
-		exitIfError(doFiles(conf, flag.Arg(0)))
+		exitIfError(doFiles(flags, flag.Arg(0)))
 	} else if cmd == "recover" {
 		if flag.NArg() < 2 {
 			usageAndExit()
 		}
-		exitIfError(doRecover(conf, flag.Arg(0), flag.Arg(1), flag.Args()[2:]))
+		exitIfError(doRecover(flags, flag.Arg(0), flag.Arg(1), flag.Args()[2:]))
 	} else if cmd == "versions" {
 		if flag.NArg() != 1 {
 			usageAndExit()
 		}
-		exitIfError(doVersions(conf, flag.Arg(0)))
+		exitIfError(doVersions(flags, flag.Arg(0)))
 	} else if cmd == "delete-version" {
 		if flag.NArg() != 2 {
 			usageAndExit()
 		}
-		exitIfError(doDeleteVersion(conf, flag.Arg(0), flag.Arg(1)))
+		exitIfError(doDeleteVersion(flags, flag.Arg(0), flag.Arg(1)))
 	} else if cmd == "delete-old-versions" {
 		if flag.NArg() != 1 {
 			usageAndExit()
 		}
-		exitIfError(doDeleteOldVersions(conf, flag.Arg(0)))
+		exitIfError(doDeleteOldVersions(flags, flag.Arg(0)))
 	} else if cmd == "verify-backups" {
 		if flag.NArg() != 1 {
 			usageAndExit()
 		}
-		exitIfError(doVerifyBackups(conf, flag.Arg(0), nil))
+		exitIfError(doVerifyBackups(flags, flag.Arg(0), nil))
 	} else if cmd == "purge-old-data" {
 		if flag.NArg() != 1 {
 			usageAndExit()
 		}
-		exitIfError(doPurgeOldData(conf, flag.Arg(0)))
+		exitIfError(doPurgeOldData(flags, flag.Arg(0)))
 	} else {
 		usageAndExit()
 	}

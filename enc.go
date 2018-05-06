@@ -95,7 +95,7 @@ type EncConfig struct {
 }
 
 const (
-	ENC_CONFIG_MAGIC = "PTVKCF"
+	ENC_CONFIG_MAGIC = "PTVBKCFG"
 	ENC_CONFIG       = "vecbackup-enc-config"
 	NO_ENCRYPTION    = iota
 	SYMMETRIC_ENCRYPTION
@@ -103,17 +103,17 @@ const (
 
 func CheckEncConfig(ec *EncConfig) error {
 	if ec.Magic != ENC_CONFIG_MAGIC {
-		return errors.New("Invalid key config: missing magic string")
+		return errors.New("Invalid enc config: missing magic string")
 	}
 	if ec.EncryptionType != NO_ENCRYPTION && ec.EncryptionType != SYMMETRIC_ENCRYPTION {
 		return errors.New(fmt.Sprintf("Unsupposed encryption method: %d", ec.EncryptionType))
 	}
 	if ec.EncryptionType == SYMMETRIC_ENCRYPTION {
 		if len(ec.Salt) == 0 {
-			return errors.New("Invalid key config: Missing salt")
+			return errors.New("Invalid enc config: Missing salt")
 		}
 		if len(ec.EncryptionKey) == 0 {
-			return errors.New("Invalid key config: Missing encrypted key")
+			return errors.New("Invalid enc config: Missing encrypted key")
 		}
 	}
 	return nil
@@ -143,16 +143,19 @@ func WriteEncConfig(bkDir string, ec *EncConfig) error {
 	fp := path.Join(bkDir, ENC_CONFIG)
 	_, err = os.Stat(fp)
 	if !os.IsNotExist(err) {
-		return errors.New(fmt.Sprintf("Key config file already exists: %s", fp))
+		return errors.New(fmt.Sprintf("Enc config file already exists: %s", fp))
 	}
 	out, err := os.Create(fp)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 	enc := gob.NewEncoder(out)
 	err = enc.Encode(ec)
-	return err
+	if err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func WriteNewEncConfig(pwFile, bkDir string) error {

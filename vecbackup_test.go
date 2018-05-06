@@ -23,19 +23,19 @@ const (
 	PWFILE = "test_pw"
 )
 
-var conf *config = InitConfig()
+var flags *Flags = InitFlags()
 
 func setupTest(t testing.TB, name string) func() {
-	conf.verbose = false
-	conf.checksum = false
-	conf.dryRun = false
-	conf.testRun = false
-	conf.version = "latest"
-	conf.setVersion = ""
-	conf.merge = false
-	conf.pwFile = ""
-	conf.out = ioutil.Discard
-	conf.defaultChunkSize = DEFAULT_CHUNK_SIZE
+	flags.verbose = false
+	flags.checksum = false
+	flags.dryRun = false
+	flags.testRun = false
+	flags.version = "latest"
+	flags.setVersion = ""
+	flags.merge = false
+	flags.pwFile = ""
+	flags.out = ioutil.Discard
+	flags.chunkSize = DEFAULT_CHUNK_SIZE
 
 	removeAll(t, SRCDIR)
 	removeAll(t, BKDIR)
@@ -95,54 +95,54 @@ func (e *TestEnv) failIfError(name string, err error) {
 
 func (e *TestEnv) setPW(pw []byte) {
 	if len(pw) == 0 {
-		conf.pwFile = ""
+		flags.pwFile = ""
 	} else {
 		err := ioutil.WriteFile(PWFILE, pw, 0444)
 		if err != nil {
 			e.t.Fatalf("setPW failed: %s", err)
 		}
-		conf.pwFile = PWFILE
+		flags.pwFile = PWFILE
 	}
 }
 
 func (e *TestEnv) init() {
-	e.failIfError("init", doInit(conf, BKDIR))
+	e.failIfError("init", doInit(flags, BKDIR))
 }
 
 func (e *TestEnv) backup() {
-	e.failIfError("backup", doBackup(conf, SRCDIR, BKDIR, nil))
+	e.failIfError("backup", doBackup(flags, SRCDIR, BKDIR, nil))
 }
 
 func (e *TestEnv) backupSubpaths(subpaths []string) {
-	e.failIfError("backup", doBackup(conf, SRCDIR, BKDIR, subpaths))
+	e.failIfError("backup", doBackup(flags, SRCDIR, BKDIR, subpaths))
 }
 
 func (e *TestEnv) recover() []string {
 	var b bytes.Buffer
-	conf.out = &b
-	e.failIfError("recover", doRecover(conf, BKDIR, RECDIR, nil))
+	flags.out = &b
+	e.failIfError("recover", doRecover(flags, BKDIR, RECDIR, nil))
 	r := strings.Split(b.String(), "\n")
 	return r[:len(r)-1]
 }
 
 func (e *TestEnv) recoverFiles(patterns []string) []string {
 	var b bytes.Buffer
-	conf.out = &b
-	e.failIfError("recover", doRecover(conf, BKDIR, RECDIR, patterns))
+	flags.out = &b
+	e.failIfError("recover", doRecover(flags, BKDIR, RECDIR, patterns))
 	r := strings.Split(b.String(), "\n")
 	return r[:len(r)-1]
 }
 
 func (e *TestEnv) verifyBackups() (numChunks, numOk, numFailed, numUnused int) {
 	var r verifyBackupResults
-	e.failIfError("verifyBackups", doVerifyBackups(conf, BKDIR, &r))
+	e.failIfError("verifyBackups", doVerifyBackups(flags, BKDIR, &r))
 	return r.numChunks, r.numOk, r.numFailed, r.numUnused
 }
 
 func (e *TestEnv) purgeOldData() string {
 	var b bytes.Buffer
-	conf.out = &b
-	e.failIfError("purgeOldData", doPurgeOldData(conf, BKDIR))
+	flags.out = &b
+	e.failIfError("purgeOldData", doPurgeOldData(flags, BKDIR))
 	return b.String()
 }
 
@@ -218,24 +218,24 @@ func (e *TestEnv) rmRec(f string) {
 
 func (e *TestEnv) versions() []string {
 	var b bytes.Buffer
-	conf.out = &b
-	e.failIfError("versions", doVersions(conf, BKDIR))
+	flags.out = &b
+	e.failIfError("versions", doVersions(flags, BKDIR))
 	r := strings.Split(b.String(), "\n")
 	return r[:len(r)-1]
 }
 
 func (e *TestEnv) deleteVersion(version string) {
-	e.failIfError("deleteVersion", doDeleteVersion(conf, BKDIR, version))
+	e.failIfError("deleteVersion", doDeleteVersion(flags, BKDIR, version))
 }
 
 func (e *TestEnv) files(version string) []string {
 	if version == "" {
 		version = "latest"
 	}
-	conf.version = version
+	flags.version = version
 	var b bytes.Buffer
-	conf.out = &b
-	e.failIfError("files", doFiles(conf, BKDIR))
+	flags.out = &b
+	e.failIfError("files", doFiles(flags, BKDIR))
 	r := strings.Split(b.String(), "\n")
 	return r[:len(r)-1]
 }
@@ -657,7 +657,7 @@ func TestT07(t *testing.T) {
 		}
 		sizes := []int{1 << 12, 1 << 16, 1 << 20, 1 << 24}
 		for _, size := range sizes {
-			conf.defaultChunkSize = size
+			flags.chunkSize = size
 			e.init()
 			e.backup()
 			e.recover()
@@ -728,7 +728,7 @@ func TestT09(t *testing.T) {
 		e.rmRec("c/c2")
 		e.rmRec("c")
 		e.checkNotExist("c")
-		conf.merge = true
+		flags.merge = true
 		e.recover()
 		e.checkSame()
 	})
@@ -743,10 +743,10 @@ func TestT10(t *testing.T) {
 		e.add("b")
 		e.add("c/c2")
 		e.add("d/d2/d3/d4")
-		conf.dryRun = true
+		flags.dryRun = true
 		e.backup()
 		e.filesMatch("", []string{})
-		conf.dryRun = false
+		flags.dryRun = false
 		e.backup()
 		e.filesMatch("", []string{"a", "b", "c/", "c/c2", "d/", "d/d2/", "d/d2/d3/", "d/d2/d3/d4"})
 		e.recover()
@@ -776,7 +776,7 @@ func TestT11(t *testing.T) {
 
 func TestT12(t *testing.T) {
 	doTestSeq(t, "T12 backup -cs", func(e *TestEnv) {
-		conf.checksum = true
+		flags.checksum = true
 		e.init()
 		for i := 0; i < 20; i++ {
 			fs := 1 << uint(i)
@@ -804,16 +804,16 @@ func TestT13(t *testing.T) {
 			e.addFile(fmt.Sprintf("c%d", fs), fs-1, i)
 		}
 		e.backup()
-		conf.dryRun = true
+		flags.dryRun = true
 		files := e.recover()
 		e.checkNotExist("")
 		e.filesMatch("", files)
-		conf.dryRun = false
-		conf.testRun = true
+		flags.dryRun = false
+		flags.testRun = true
 		files = e.recover()
 		e.checkNotExist("")
 		e.filesMatch("", files)
-		conf.testRun = false
+		flags.testRun = false
 		e.recover()
 		e.checkSame()
 	})
@@ -831,7 +831,7 @@ func TestT14(t *testing.T) {
 		e.add("d")
 		e.backup()
 		v := e.versions()
-		conf.version = v[0]
+		flags.version = v[0]
 		e.clean("rec")
 		e.recover()
 		e.checkExistFile("a")
@@ -839,7 +839,7 @@ func TestT14(t *testing.T) {
 		e.checkNotExist("c")
 		e.checkNotExist("c/c2")
 		e.checkNotExist("d")
-		conf.version = v[1]
+		flags.version = v[1]
 		e.clean("rec")
 		e.recover()
 		e.checkExistFile("a")
@@ -847,7 +847,7 @@ func TestT14(t *testing.T) {
 		e.checkNotExist("c")
 		e.checkNotExist("c/c2")
 		e.checkNotExist("d")
-		conf.version = v[2]
+		flags.version = v[2]
 		e.clean("rec")
 		e.recover()
 		e.checkExistFile("a")
@@ -855,7 +855,7 @@ func TestT14(t *testing.T) {
 		e.checkExistDir("c")
 		e.checkExistFile("c/c2")
 		e.checkNotExist("d")
-		conf.version = v[3]
+		flags.version = v[3]
 		e.clean("rec")
 		e.recover()
 		e.checkSame()
@@ -877,7 +877,7 @@ func TestT15(t *testing.T) {
 		e.checkNotExist("c/c2")
 		e.checkNotExist("c/c3")
 		e.checkNotExist("d/d2/d3")
-		conf.merge = true
+		flags.merge = true
 		e.recoverFiles([]string{"b"})
 		e.checkExistFile("a")
 		e.checkExistFile("b")
@@ -941,29 +941,29 @@ func TestT17(t *testing.T) {
 	doTestSeq(t, "T17 setVersion", func(e *TestEnv) {
 		e.init()
 		e.add("a")
-		conf.setVersion = "2011-02-03T04:05:06Z"
+		flags.setVersion = "2011-02-03T04:05:06Z"
 		e.backup()
 		e.add("b")
-		conf.setVersion = "2011-02-03T04:01:06Z"
+		flags.setVersion = "2011-02-03T04:01:06Z"
 		e.backup()
 		e.add("c")
-		conf.setVersion = "2011-02-03T04:09:06Z"
+		flags.setVersion = "2011-02-03T04:09:06Z"
 		e.backup()
-		conf.setVersion = ""
+		flags.setVersion = ""
 		e.clean("rec")
-		conf.version = "2011-02-03T04:01:06Z"
+		flags.version = "2011-02-03T04:01:06Z"
 		e.recover()
 		e.checkExistFile("a")
 		e.checkExistFile("b")
 		e.checkNotExist("c")
 		e.clean("rec")
-		conf.version = "2011-02-03T04:05:06Z"
+		flags.version = "2011-02-03T04:05:06Z"
 		e.recover()
 		e.checkExistFile("a")
 		e.checkNotExist("b")
 		e.checkNotExist("c")
 		e.clean("rec")
-		conf.version = "2011-02-03T04:09:06Z"
+		flags.version = "2011-02-03T04:09:06Z"
 		e.recover()
 		e.checkExistFile("a")
 		e.checkExistFile("c")
@@ -984,10 +984,10 @@ func TestT18(t *testing.T) {
 		e.backup()
 		numChunks, numOk, numFailed, numUnused := e.verifyBackups()
 		e.t.Logf("%d numChunks %d numOk, %d numFailed, %d numUnused", numChunks, numOk, numFailed, numUnused)
-		conf.dryRun = true
+		flags.dryRun = true
 		e.recover()
 		e.checkNotExist("")
-		conf.dryRun = false
+		flags.dryRun = false
 		e.recover()
 		e.checkSame()
 	})
@@ -1016,10 +1016,10 @@ func TestT19(t *testing.T) {
 		if numFailed != 0 || numUnused != 0 {
 			e.t.Error("Number of failed and unused chunks should be zero")
 		}
-		conf.dryRun = true
+		flags.dryRun = true
 		e.recover()
 		e.checkNotExist("")
-		conf.dryRun = false
+		flags.dryRun = false
 		e.recover()
 		e.checkSame()
 		v := e.versions()
@@ -1030,13 +1030,13 @@ func TestT19(t *testing.T) {
 			e.t.Error("Number of failed and unused chunks should be zero")
 		}
 		e.clean("rec")
-		conf.version = v[0]
+		flags.version = v[0]
 		e.recover()
 		e.clean("rec")
-		conf.version = v[1]
+		flags.version = v[1]
 		e.recover()
 		e.checkSame()
-		conf.version = ""
+		flags.version = ""
 		e.deleteVersion(v[1])
 		numChunks, numOk, numFailed, numUnused = e.verifyBackups()
 		e.t.Logf("%d numChunks %d numOk, %d numFailed, %d numUnused", numChunks, numOk, numFailed, numUnused)
@@ -1050,7 +1050,7 @@ func TestT19(t *testing.T) {
 			e.t.Fatal("Number of failed and unused chunks should be zero")
 		}
 		e.clean("rec")
-		conf.version = v[0]
+		flags.version = v[0]
 		e.recover()
 		e.deleteVersion(v[0])
 		numChunks, numOk, numFailed, numUnused = e.verifyBackups()
@@ -1147,8 +1147,8 @@ func TestT22(t *testing.T) {
 	rand.Seed(2)
 	doTestSeq(t, "Random test", func(e *TestEnv) {
 		e.setPW([]byte("ofinewnfd;fnadsfsmocewmocwfdsafsdafsadf"))
+		flags.chunkSize = 99
 		e.init()
-		conf.defaultChunkSize = 99
 		vf := make([][]string, N)
 		nodes := make([]string, NF)
 		for iter := 0; iter < N; iter++ {
@@ -1162,7 +1162,7 @@ func TestT22(t *testing.T) {
 		versions := e.versions()
 		for iter := 0; iter < N; iter++ {
 			e.clean("rec")
-			conf.version = versions[iter]
+			flags.version = versions[iter]
 			rf := e.recover()
 			if !reflect.DeepEqual(vf[iter], rf) {
 				e.t.Fatalf("Not equal, iter %d: %v\n%v", iter, vf[iter], rf)

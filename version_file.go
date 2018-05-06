@@ -17,9 +17,7 @@ import (
 )
 
 type Header struct {
-	Magic     string
-	Version   int
-	ChunkSize int
+	Magic string
 }
 
 type FileData struct {
@@ -36,7 +34,8 @@ type FileType int
 type CS []byte
 
 const (
-	REGULAR_FILE FileType = iota
+	VERSION_MAGIC          = "PTVBKVSN"
+	REGULAR_FILE  FileType = iota
 	DIRECTORY
 	SYMLINK
 )
@@ -124,8 +123,8 @@ type VersionMgr interface {
 	GetVersion(version string) (string, error)
 	GetVersions() ([]string, error)
 	DeleteVersion(version string) error
-	LoadVersion(v string) (*Header, FReader, error)
-	SaveVersion(version time.Time, h *Header) (FWriter, error)
+	LoadVersion(v string) (FReader, error)
+	SaveVersion(version time.Time) (FWriter, error)
 }
 
 type FWriter interface {
@@ -197,37 +196,33 @@ func (vm *VMgr) DeleteVersion(v string) error {
 	return nil
 }
 
-func (vm *VMgr) LoadVersion(v string) (*Header, FReader, error) {
+func (vm *VMgr) LoadVersion(v string) (FReader, error) {
 	fp := path.Join(vm.dir, VERSIONS_DIR, MakeVersionFileNameFromString(v))
 	in, err := os.Open(fp)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	var in2 io.Reader = in
 	if vm.key != nil {
 		ds, err := makeDecryptionStream(vm.key, in)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		in2 = ds
 	}
 	gz, err := gzip.NewReader(in2)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	dec := gob.NewDecoder(gz)
 	h := &Header{}
 	dec.Decode(h)
-	if h.Magic != MAGIC {
+	if h.Magic != VERSION_MAGIC {
+		gz.Close()
 		in.Close()
-		return nil, nil, errors.New("Invalid version header: missing magic string")
+		return nil, errors.New("Invalid version header: missing magic string")
 	}
-	if h.Version != BKVERSION {
-		in.Close()
-		debugP("Unsupported version file version %d, expected version %d\n", h.Version, BKVERSION)
-		return nil, nil, errors.New("Unsupported version file")
-	}
-	return h, &VFReader{fp: fp, in: in, gz: gz, dec: dec, last: ""}, nil
+	return &VFReader{fp: fp, in: in, gz: gz, dec: dec, last: ""}, nil
 }
 
 type VFReader struct {
@@ -267,10 +262,11 @@ func (vfr *VFReader) Close() error {
 	return vfr.in.Close()
 }
 
-func (vm *VMgr) SaveVersion(version time.Time, h *Header) (FWriter, error) {
+func (vm *VMgr) SaveVersion(version time.Time) (FWriter, error) {
 	fp := path.Join(vm.dir, VERSIONS_DIR, MakeVersionFileName(version))
 	tfp := fp + TEMP_FILE_SUFFIX
 	vfw := &VFWriter{fp: fp, tfp: tfp}
+	h := &Header{VERSION_MAGIC}
 	err := vfw.WriteVersionFileStart(h, vm.key)
 	if err != nil {
 		vfw.cleanup()
