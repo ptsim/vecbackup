@@ -675,7 +675,7 @@ func doInit(flags *Flags, bkDir string) error {
 	return err
 }
 
-func doBackup(flags *Flags, src, bkDir string, subpaths []string) error {
+func doBackup(flags *Flags, bkDir, src string, subpaths []string) error {
 	bkDir, vm, cm, cfg, err := setup(bkDir, flags.pwFile)
 	if err != nil {
 		return err
@@ -997,7 +997,7 @@ func usageAndExit() {
       -chunksize    files are broken into chunks of this size.
     Initialize a new backup directory.
 
-  vecbackup backup [-v] [-cs] [-n] [-setversion <version>] [-pw <pwfile>] <srcdir> <backupdir> [<subpath> ...]
+  vecbackup backup [-v] [-cs] [-n] [-setversion <version>] [-pw <pwfile>] <backupdir> <srcdir> [<subpath> ...]
     Incrementally and recursively backs up the files, directories and symbolic
     links (items) in <srcdir> to <backupdir>. If one or more <subpath> are
     specified, only backup those subpaths. <subpaths> are relative to <srcdir>.

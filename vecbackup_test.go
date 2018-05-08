@@ -110,11 +110,11 @@ func (e *TestEnv) init() {
 }
 
 func (e *TestEnv) backup() {
-	e.failIfError("backup", doBackup(flags, SRCDIR, BKDIR, nil))
+	e.failIfError("backup", doBackup(flags, BKDIR, SRCDIR, nil))
 }
 
 func (e *TestEnv) backupSubpaths(subpaths []string) {
-	e.failIfError("backup", doBackup(flags, SRCDIR, BKDIR, subpaths))
+	e.failIfError("backup", doBackup(flags, BKDIR, SRCDIR, subpaths))
 }
 
 func (e *TestEnv) recover() []string {
