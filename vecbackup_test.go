@@ -2,7 +2,7 @@ package main
 
 import (
 	"bytes"
-	//"errors"
+	"flag"
 	"fmt"
 	"hash/fnv"
 	"io/ioutil"
@@ -22,6 +22,8 @@ const (
 	RECDIR = "test_rec"
 	PWFILE = "test_pw"
 )
+
+var longTest = flag.Bool("longtest", false, "Long test.")
 
 var flags *Flags = InitFlags()
 
@@ -1069,7 +1071,7 @@ func TestT19(t *testing.T) {
 
 func TestT20(t *testing.T) {
 	n := 100000
-	if testing.Short() {
+	if !*longTest {
 		n = 1000
 	}
 	totalTest(t, n, "")
@@ -1077,7 +1079,7 @@ func TestT20(t *testing.T) {
 
 func TestT21(t *testing.T) {
 	n := 100000
-	if testing.Short() {
+	if !*longTest {
 		n = 1000
 	}
 	totalTest(t, n, "nc784hlisjdfhlskhdfo8wnkljdsbvliv9odhvilsdfh")
@@ -1140,7 +1142,7 @@ func totalTest(t *testing.T, n int, pw string) {
 func TestT22(t *testing.T) {
 	N := 100
 	NF := 1000
-	if testing.Short() {
+	if !*longTest {
 		N = 100
 		NF = 100
 	}
