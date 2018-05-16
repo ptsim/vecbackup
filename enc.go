@@ -16,6 +16,8 @@ import (
 	"path"
 )
 
+const PBKDF_ROUNDS = 10000
+
 func makeEncryptionStream(key []byte, out io.Writer) (*cipher.StreamWriter, error) {
 	if len(key) != 32 {
 		return nil, errors.New("Incorrect key length")
@@ -170,7 +172,7 @@ func WriteNewEncConfig(pwFile, bkDir string) error {
 	if _, err := io.ReadFull(rand.Reader, ec.Salt); err != nil {
 		return err
 	}
-	key2 := pbkdf2.Key(pw, ec.Salt, 10000, 32, sha1.New)
+	key2 := pbkdf2.Key(pw, ec.Salt, PBKDF_ROUNDS, 32, sha1.New)
 	var check [32]byte
 	if _, err := io.ReadFull(rand.Reader, check[:16]); err != nil {
 		return err
@@ -209,7 +211,7 @@ func GetKey(pwFile, bkDir string) ([]byte, error) {
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("Cannot read pw file: %s", err))
 	}
-	key2 := pbkdf2.Key(pw, ec.Salt, 10000, 32, sha1.New)
+	key2 := pbkdf2.Key(pw, ec.Salt, PBKDF_ROUNDS, 32, sha1.New)
 	check, err := decryptBytes(key2, ec.Check)
 	if len(check) != 32 || bytes.Compare(check[:16], check[16:32]) != 0 {
 		return nil, errors.New("Wrong password")
