@@ -12,7 +12,8 @@ Versioned Encrypted Compressed backup.
 * Suitable for remote backup by copying the backup directory using rsync etc
 * MIT license.
 
-** Release version 0.2 alpha **
+** Release version 0.3 alpha **
+** Not compatitble with earlier releases. **
 
 **Use at your own risk.**
 
