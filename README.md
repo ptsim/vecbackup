@@ -65,6 +65,17 @@ To delete old backup versions and reuse the space:
 
 ```vecbackup purge-old-data /b/mybackup```
 
+## How to install?
+
+Download the OS X latest release here:
+https://github.com/ptsim/vecbackup/releases
+
+For other systems, try building from source.
+
+It will likely just work with any Linux distribution.
+
+Not tested on Windows.
+
 ## How to build?
 
 * Install golang.
