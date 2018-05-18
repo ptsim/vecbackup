@@ -14,6 +14,7 @@ Versioned Encrypted Compressed backup.
 * MIT license.
 
 ** Release version 0.3 alpha **
+
 ** Not compatitble with earlier releases. **
 
 **Use at your own risk.**
@@ -73,8 +74,9 @@ To delete old backup versions and reuse the space:
 
 You will find the ```vecbackup``` binary in the current directory.
 
-Latest version built and tested with Golang 1.10.1 on OSX 10.12/10.13.
-Earlier version tested with Golang 1.7 on Raspian on Raspberry Pi Model B 256MB.
+The latest version was built and tested with Golang 1.10.1 on OSX 10.12/10.13.
+
+Earlier version was tested with Golang 1.7 on Raspian on Raspberry Pi Model B 256MB.
 
 ## Technical FAQ
 
