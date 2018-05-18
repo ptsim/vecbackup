@@ -7,9 +7,10 @@ Versioned Encrypted Compressed backup.
 * Compresses backups using gzip
 * Optional symmetric encryption using AES-256
 * Uses little memory and CPU. Works on Raspberry PI 256MB!
-* Simple fast easy-to-understand single threaded implementation
 * Only writes files to backup directory
 * Suitable for remote backup by copying the backup directory using rsync etc
+* Simple fast easy-to-understand single threaded implementation
+* Comprehensive test suite
 * MIT license.
 
 ** Release version 0.3 alpha **
@@ -27,7 +28,7 @@ First, initialize the backup directory:
 
 Do the backup:
 
-```vecbackup backup /a/mystuff /b/mybackup```
+```vecbackup backup /b/mybackup /a/mystuff```
 
 To see the timestamps of previous backups:
 
@@ -68,11 +69,12 @@ To delete old backup versions and reuse the space:
 * Install golang.
 * Clone this repository.
 * ```go build```
-* ```go test``` (or ```go test -short```)
+* ```go test``` (or ```go test -longtest```)
 
 You will find the ```vecbackup``` binary in the current directory.
 
-Tested with Golang 1.7 on OSX 10.11.6 and Raspian on Raspberry Pi Model B 256MB.
+Latest version built and tested with Golang 1.10.1 on OSX 10.12/10.13.
+Earlier version tested with Golang 1.7 on Raspian on Raspberry Pi Model B 256MB.
 
 ## Technical FAQ
 
@@ -80,9 +82,9 @@ Tested with Golang 1.7 on OSX 10.11.6 and Raspian on Raspberry Pi Model B 256MB.
 * Just run ```vecbackup``` and it will print all the commands and options.
 
 ### Q: How are files backed up?
-* Each file is broken into 16MB chunks
+* Each file is broken into 16MB chunks. The size can be set with -chunksize flag during initialization.
 * Each file is recorded as a list of chunks, metadata and whole file checksum.
-* Each chunk is checksummed (sha512_256), compressed and encrypted (optional).
+* Each chunk is checksummed (sha512_256), compressed and optionally encrypted using AES-256.
 * Chunks are added and never modified or deleted during the backup operation
 * A version manifest file (named with a RFC3339Nano timestamp) lists all the files for a version of the backup.
 
@@ -95,7 +97,7 @@ Tested with Golang 1.7 on OSX 10.11.6 and Raspian on Raspberry Pi Model B 256MB.
 * Hard links are backed up like normal files.
 * Empty directories are backed up.
 * Other special files are ignored silently.
-* Unix permissions are recorded and recreated except the directories will be user writable.
+* Unix permissions are recorded and recreated except that the directories will be user writable.
 * User and group ownership are ignored.
 * Last modified timestamp for files are backed up.
 
@@ -126,7 +128,7 @@ Tested with Golang 1.7 on OSX 10.11.6 and Raspian on Raspberry Pi Model B 256MB.
 * Create a file containing your desired password
 * Use ```-pw <path_to_your_password_file>``` for all commands. For example:
 
-```vecbackup init -pw /a/mybkpw /b/mybackup```
+```vecbackup init -pw /b/mybackup /a/mybkpw```
 * Save the password file separately from the actual backup directory.
 * **```vecbackup init -pw``` generates and stores a random key in ```vecbackup-enc-config``` in the backup directory.**
 * **Chunks and version files are encrypted with that key.**
@@ -168,3 +170,4 @@ Tested with Golang 1.7 on OSX 10.11.6 and Raspian on Raspberry Pi Model B 256MB.
 
 ### Q: What do you use this for?
 * I use this to backup all my data, mostly consisting of terabytes of irreplaceable photos and videos.
+* It is also great for storing sensitive or working data on free cloud storage.
