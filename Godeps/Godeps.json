@@ -1,10 +1,22 @@
 {
-	"ImportPath": "ptsim/vecbackup",
-	"GoVersion": "go1.7",
+	"ImportPath": "github.com/ptsim/vecbackup",
+	"GoVersion": "go1.11",
 	"GodepVersion": "v79",
 	"Deps": [
 		{
+			"ImportPath": "golang.org/x/crypto/nacl/secretbox",
+			"Rev": "728b753d0135da6801d45a38e6f43ff55779c5c2"
+		},
+		{
 			"ImportPath": "golang.org/x/crypto/pbkdf2",
+			"Rev": "728b753d0135da6801d45a38e6f43ff55779c5c2"
+		},
+		{
+			"ImportPath": "golang.org/x/crypto/poly1305",
+			"Rev": "728b753d0135da6801d45a38e6f43ff55779c5c2"
+		},
+		{
+			"ImportPath": "golang.org/x/crypto/salsa20/salsa",
 			"Rev": "728b753d0135da6801d45a38e6f43ff55779c5c2"
 		}
 	]
