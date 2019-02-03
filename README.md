@@ -4,17 +4,11 @@ Versioned Encrypted Compressed backup.
 
 * Backs up multiple versions locally
 * De-duplicates based on content checksums (sha512_256)
-* Compresses backups using gzip
-* Optional symmetric encryption using Golang's secretbox (NaCl)
-* Only writes files to backup directory
-* Suitable for remote backup by copying the backup directory using rsync etc
-* Simple fast easy-to-understand single threaded implementation
-* Comprehensive test suite
+* Compresses backups (gzip)
+* Optionally password protect and encrypt backups with authenticated encryption (NaCl)
 * MIT license.
 
-** Latest master branch is not compatible with earlier releases. **
-
-**Use at your own risk.**
+**Disclaimer: Use at your own risk.**
 
 ## How to use?
 
@@ -68,7 +62,6 @@ Download the OS X latest release here:
 https://github.com/ptsim/vecbackup/releases
 
 For other systems, try building from source.
-
 It will likely just work with any Linux distribution.
 
 Not tested on Windows.
@@ -82,11 +75,9 @@ Not tested on Windows.
 
 You will find the ```vecbackup``` binary in the current directory.
 
-The latest version was built and tested with Golang 1.10.1 on OSX 10.12/10.13.
+The latest version was built and tested with Golang 1.11.5 on OSX 10.14.
 
-Earlier version was tested with Golang 1.7 on Raspian on Raspberry Pi Model B 256MB.
-
-## Technical FAQ
+## FAQ
 
 ### Q: How do I see all the options?
 * Just run ```vecbackup``` and it will print all the commands and options.
@@ -94,7 +85,7 @@ Earlier version was tested with Golang 1.7 on Raspian on Raspberry Pi Model B 25
 ### Q: How are files backed up?
 * Each file is broken into 16MB chunks. The size can be set with -chunksize flag during initialization.
 * Each file is recorded as a list of chunks, metadata and whole file checksum.
-* Each chunk is checksummed (sha512_256), compressed and optionally encrypted using secretbox (NaCl).
+* Each chunk is checksummed (sha512_256), compressed and optionally encrypted using Golang secretbox (NaCl).
 * Chunks are added and never modified or deleted during the backup operation
 * A version manifest file (named with a RFC3339Nano timestamp) lists all the files for a version of the backup.
 
@@ -124,33 +115,34 @@ Earlier version was tested with Golang 1.7 on Raspian on Raspberry Pi Model B 25
 * Each chunk has a sha512_256 checksum.
 * Each file has a sha512_256 for the whole file.
 * During recovery, the checksums are verified.
-* Symbolic links and metadata like timestamps are not checksummed.
-* Version manifest files are not checksummed.
+* If encryption is used, all chunks, symbolic links, metadata and version manifest files are encrypted using authenticated encryption (See NaCl).
+* If no encryption is used, symbolic links, metadata and version manifest files are not checksummed.
 
 ### Q: Why are the chunks compressed?
 * Because I have many uncompressed files.
 * gzip is fast
 
-### Q: What is the symmetric encryption for?
-* So that I can clone the backup to "unsafe" remote or cloud storage or keep offline hard drives containing copies of the backup.
-
-### Q: How do I use symmetric encrytion?
+### Q: How do I use encryption?
 * Create a file containing your desired password
 * Use ```-pw <path_to_your_password_file>``` for all commands. For example:
 
-```vecbackup init -pw /b/mybackup /a/mybkpw```
-* Save the password file separately from the actual backup directory.
-* **```vecbackup init -pw``` generates and stores a random key in ```vecbackup-enc-config``` in the backup directory.**
-* **Chunks and version files are encrypted with that key.**
-* **```vecbackup-enc-config``` is encrypted with a key derived from your password using PBKDF2.**
-* **If you lose the ```vecbackup-enc-config``` file, there is no way to recover the data.**
+```vecbackup init -pw /a/mybkpw /b/mybackup```
+* If you lose your password, there is almost no way to recover the data in the backup.
+
+ recover the data.**
+
+### Q: What is the encryption for?
+* So that I can copy the backups to "unsafe" remote, cloud or offline storage.
+* With authenticated encryption, I can be sure the backup files have not been modified accidentially or intentionally.
 
 ### Q: Did you roll your own encryption scheme?
 * No.
-* Encryption keys are generated from the user's password using PBKDF2 (10,000 rounds).
-* Golang's secretbox (NaCl https://nacl.cr.yp.to/) is used to store all data and metadata.
+* The 256-bit master encryption key is derived from the user's password using PBKDF2 (10,000 rounds).
+* The 256-bit storage encryption key is randomly generated and encrypted using the master encryption key.
+* All encrypted data is stored using Golang's secretbox module.
+* Secretbox provides authenticated encryption and is interoperable with NaCl (https://nacl.cr.yp.to/).
 
-### Q: How do I tell vecbackup to skip (ignore) certain files?
+## Q: How do I tell vecbackup to skip (ignore) certain files?
 * Create a file named ```vecbackup-ignore``` in the backup directory after running ```vecbackup init```.
 * Each line in the file is a pattern containing files to ignore.
 * Run ```vecbackup``` for more details.
@@ -180,8 +172,9 @@ Earlier version was tested with Golang 1.7 on Raspian on Raspberry Pi Model B 25
 
 ### Q: Is this ready for use?
 * **This is an alpha release.**
+* **The backup file format is still subject to change.**
 * **Use at your own risk.**
-* Having said that, I am using it actively **in conjunction** with other backup software.
+* Having said that, I have been using it for a few years **in conjunction** with other backup software.
 
 ### Q: What do you use this for?
 * I use this to backup all my data, mostly consisting of terabytes of irreplaceable photos and videos.
