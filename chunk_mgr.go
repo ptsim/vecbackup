@@ -1,11 +1,9 @@
 package main
 
 import (
-	"compress/gzip"
 	"encoding/base32"
 	"errors"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"math"
 	"os"
@@ -41,15 +39,15 @@ type ChunkMgr interface {
 	GetAllChunks() map[string]int
 }
 
-func MakeChunkMgr(bkDir string, key []byte) ChunkMgr {
-	return &CMgr{dir: path.Join(bkDir, CHUNK_DIR), k: key}
+func MakeChunkMgr(bkDir string, key *[32]byte) ChunkMgr {
+	return &CMgr{dir: path.Join(bkDir, CHUNK_DIR), key: key}
 }
 
 //---------------------------------------------------------------------------
 
 type CMgr struct {
 	dir string
-	k   []byte
+	key *[32]byte
 }
 
 func computeChunkDirPrefix(name string) string {
@@ -67,56 +65,40 @@ func (cm *CMgr) FindChunk(name string) bool {
 
 func (cm *CMgr) ReadChunk(name string, buffer []byte) error {
 	fp := path.Join(cm.dir, computeChunkDirPrefix(name), name)
-	in, err := os.Open(fp)
-	defer in.Close()
+	ciphertext, err := ioutil.ReadFile(fp)
 	if err != nil {
 		return err
 	}
-	var in2 io.Reader = in
-	if cm.k != nil {
-		ds, err := makeDecryptionStream(cm.k, in)
-		if err != nil {
-			return err
-		}
-		in2 = ds
+	var text []byte
+	if cm.key == nil {
+		text, err = gunzipBytes(ciphertext)
+	} else {
+		text, err = decGunzipBytes(cm.key, ciphertext)
 	}
-	gz, err := gzip.NewReader(in2)
 	if err != nil {
 		return err
 	}
-	defer gz.Close()
-	n, err := io.ReadFull(gz, buffer)
-	if n != len(buffer) {
+	if len(text) < len(buffer) {
 		return errors.New("Chunk too small")
+	} else if len(text) > len(buffer) {
+		return errors.New("Chunk too big")
 	}
-	if err == io.EOF {
-		err = nil
-	}
-	return err
+	copy(buffer, text)
+	return nil
 }
 
-func writeChunkToFile(p string, k []byte, chunk []byte) error {
-	out, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0444)
+func writeChunkToFile(p string, k *[32]byte, chunk []byte) error {
+	var ciphertext []byte
+	var err error = nil
+	if k == nil {
+		ciphertext = gzipBytes(chunk)
+	} else {
+		ciphertext, err = encGzipBytes(k, chunk)
+	}
 	if err != nil {
-		return errors.New(fmt.Sprintf("Can't write chunk file %s: %s", p, err))
+		return err
 	}
-	defer out.Close()
-	var out2 io.Writer = out
-	if k != nil {
-		es, err := makeEncryptionStream(k, out)
-		if err != nil {
-			return err
-		}
-		defer es.Close()
-		out2 = es
-	}
-	gz := gzip.NewWriter(out2)
-	defer gz.Close()
-	n, err := gz.Write(chunk)
-	if n < len(chunk) {
-		return io.ErrShortWrite
-	}
-	return nil
+	return ioutil.WriteFile(p, ciphertext, 0444)
 }
 
 func (cm *CMgr) AddChunk(name string, chunk []byte) error {
@@ -129,7 +111,7 @@ func (cm *CMgr) AddChunk(name string, chunk []byte) error {
 	fp := path.Join(dir, name)
 	tfp := fp + TEMP_FILE_SUFFIX
 	os.MkdirAll(dir, DEFAULT_DIR_PERM)
-	err := writeChunkToFile(tfp, cm.k, chunk)
+	err := writeChunkToFile(tfp, cm.key, chunk)
 	if err == nil {
 		err = os.Rename(tfp, fp)
 	}

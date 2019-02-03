@@ -2,13 +2,13 @@ package main
 
 import (
 	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
+	"compress/gzip"
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/gob"
 	"errors"
 	"fmt"
+	"golang.org/x/crypto/nacl/secretbox"
 	"golang.org/x/crypto/pbkdf2"
 	"io"
 	"io/ioutil"
@@ -18,81 +18,73 @@ import (
 
 const PBKDF_ROUNDS = 10000
 
-func makeEncryptionStream(key []byte, out io.Writer) (*cipher.StreamWriter, error) {
-	if len(key) != 32 {
-		return nil, errors.New("Incorrect key length")
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
+func encryptBytes(key *[32]byte, text []byte) ([]byte, error) {
+	// from golang secretbox example
+	// You must use a different nonce for each message you encrypt with the
+	// same key. Since the nonce here is 192 bits long, a random value
+	// provides a sufficiently small probability of repeats.
+	var nonce [24]byte
+	if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
 		return nil, err
 	}
-	var iv [aes.BlockSize]byte
-	if _, err := io.ReadFull(rand.Reader, iv[:]); err != nil {
-		return nil, err
-	}
-	cfb := cipher.NewCFBEncrypter(block, iv[:])
-	n, err := out.Write(iv[:])
-	if err != nil {
-		return nil, err
-	}
-	if n != len(iv) {
-		return nil, io.ErrShortWrite
-	}
-	return &cipher.StreamWriter{S: cfb, W: out}, nil
+
+	// This encrypts the text and appends the result to the nonce.
+	encrypted := secretbox.Seal(nonce[:], text, &nonce, key)
+	return encrypted, nil
 }
 
-func makeDecryptionStream(key []byte, in io.Reader) (*cipher.StreamReader, error) {
-	if len(key) != 32 {
-		return nil, errors.New("Incorrect key length")
+func decryptBytes(key *[32]byte, encrypted []byte) ([]byte, error) {
+	var nonce [24]byte
+	copy(nonce[:], encrypted[:24])
+	decrypted, ok := secretbox.Open(nil, encrypted[24:], &nonce, key)
+	if !ok {
+		return nil, errors.New("secretbox.Open failed")
 	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	var iv [aes.BlockSize]byte
-	if _, err := io.ReadFull(in, iv[:]); err != nil {
-		return nil, err
-	}
-	cfb := cipher.NewCFBDecrypter(block, iv[:])
-	return &cipher.StreamReader{S: cfb, R: in}, nil
+	return decrypted, nil
 }
 
-func encryptBytes(key, text []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	b := []byte(text)
-	ciphertext := make([]byte, aes.BlockSize+len(b))
-	iv := ciphertext[:aes.BlockSize]
-	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
-		return nil, err
-	}
-	cfb := cipher.NewCFBEncrypter(block, iv)
-	cfb.XORKeyStream(ciphertext[aes.BlockSize:], []byte(b))
-	return ciphertext, nil
+func encGzipBytes(key *[32]byte, text []byte) ([]byte, error) {
+	var gzipBuf bytes.Buffer
+	gzw := gzip.NewWriter(&gzipBuf)
+	gzw.Write(text)
+	gzw.Close()
+	return encryptBytes(key, gzipBuf.Bytes())
 }
 
-func decryptBytes(key, text []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
+func decGunzipBytes(key *[32]byte, encrypted []byte) ([]byte, error) {
+	gzipText, err := decryptBytes(key, encrypted)
 	if err != nil {
 		return nil, err
 	}
-	if len(text) < aes.BlockSize {
-		return nil, errors.New("ciphertext too short")
+	gz, err := gzip.NewReader(bytes.NewBuffer(gzipText))
+	if err != nil {
+		return nil, err
 	}
-	iv := text[:aes.BlockSize]
-	text = text[aes.BlockSize:]
-	cfb := cipher.NewCFBDecrypter(block, iv)
-	cfb.XORKeyStream(text, text)
-	return text, nil
+	defer gz.Close()
+	return ioutil.ReadAll(gz)
+}
+
+func gzipBytes(text []byte) []byte {
+	var gzipBuf bytes.Buffer
+	gzw := gzip.NewWriter(&gzipBuf)
+	gzw.Write(text)
+	gzw.Close()
+	return gzipBuf.Bytes()
+}
+
+func gunzipBytes(gzipText []byte) ([]byte, error) {
+	gz, err := gzip.NewReader(bytes.NewBuffer(gzipText))
+	if err != nil {
+		return nil, err
+	}
+	defer gz.Close()
+	return ioutil.ReadAll(gz)
 }
 
 type EncConfig struct {
 	Magic          string
 	EncryptionType int
 	Salt           []byte
-	Check          []byte
 	EncryptionKey  []byte
 }
 
@@ -173,27 +165,20 @@ func WriteNewEncConfig(pwFile, bkDir string) error {
 		return err
 	}
 	key2 := pbkdf2.Key(pw, ec.Salt, PBKDF_ROUNDS, 32, sha1.New)
-	var check [32]byte
-	if _, err := io.ReadFull(rand.Reader, check[:16]); err != nil {
-		return err
-	}
-	copy(check[16:32], check[:16])
-	ec.Check, err = encryptBytes(key2, check[:])
-	if err != nil {
-		return err
-	}
+	var key3 [32]byte
+	copy(key3[:], key2)
 	var rawKey [32]byte
 	if _, err := io.ReadFull(rand.Reader, rawKey[:]); err != nil {
 		return err
 	}
-	ec.EncryptionKey, err = encryptBytes(key2, rawKey[:])
+	ec.EncryptionKey, err = encryptBytes(&key3, rawKey[:])
 	if err != nil {
 		return err
 	}
 	return WriteEncConfig(bkDir, &ec)
 }
 
-func GetKey(pwFile, bkDir string) ([]byte, error) {
+func GetKey(pwFile, bkDir string) (*[32]byte, error) {
 	ec, err := ReadEncConfig(path.Join(bkDir, ENC_CONFIG))
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("Cannot read enc config file: %s", err))
@@ -212,13 +197,16 @@ func GetKey(pwFile, bkDir string) ([]byte, error) {
 		return nil, errors.New(fmt.Sprintf("Cannot read pw file: %s", err))
 	}
 	key2 := pbkdf2.Key(pw, ec.Salt, PBKDF_ROUNDS, 32, sha1.New)
-	check, err := decryptBytes(key2, ec.Check)
-	if len(check) != 32 || bytes.Compare(check[:16], check[16:32]) != 0 {
+	var key3 [32]byte
+	copy(key3[:], key2)
+	key, err := decryptBytes(&key3, ec.EncryptionKey)
+	if err != nil {
 		return nil, errors.New("Wrong password")
 	}
-	key, err := decryptBytes(key2, ec.EncryptionKey)
-	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Cannot decrypt enc key: %s", err))
+	if len(key) != 32 {
+		return nil, errors.New("Encrypted key is not 32 bytes long")
 	}
-	return append([]byte(nil), key[:]...), nil
+	var key4 [32]byte
+	copy(key4[:], key)
+	return &key4, nil
 }

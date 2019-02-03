@@ -1,8 +1,7 @@
 package main
 
 import (
-	"compress/gzip"
-	"crypto/cipher"
+	"bytes"
 	"encoding/gob"
 	"errors"
 	"fmt"
@@ -142,10 +141,10 @@ type FReader interface {
 
 type VMgr struct {
 	dir string
-	key []byte
+	key *[32]byte
 }
 
-func MakeVersionMgr(bkDir string, key []byte) VersionMgr {
+func MakeVersionMgr(bkDir string, key *[32]byte) VersionMgr {
 	return &VMgr{dir: bkDir, key: key}
 }
 
@@ -198,37 +197,28 @@ func (vm *VMgr) DeleteVersion(v string) error {
 
 func (vm *VMgr) LoadVersion(v string) (FReader, error) {
 	fp := path.Join(vm.dir, VERSIONS_DIR, MakeVersionFileNameFromString(v))
-	in, err := os.Open(fp)
+	ciphertext, err := ioutil.ReadFile(fp)
 	if err != nil {
 		return nil, err
 	}
-	var in2 io.Reader = in
-	if vm.key != nil {
-		ds, err := makeDecryptionStream(vm.key, in)
-		if err != nil {
-			return nil, err
-		}
-		in2 = ds
+	var text []byte
+	if vm.key == nil {
+		text, err = gunzipBytes(ciphertext)
+	} else {
+		text, err = decGunzipBytes(vm.key, ciphertext)
 	}
-	gz, err := gzip.NewReader(in2)
-	if err != nil {
-		return nil, err
-	}
-	dec := gob.NewDecoder(gz)
+	buf := bytes.NewBuffer(text)
+	dec := gob.NewDecoder(buf)
 	h := &Header{}
 	dec.Decode(h)
 	if h.Magic != VERSION_MAGIC {
-		gz.Close()
-		in.Close()
 		return nil, errors.New("Invalid version header: missing magic string")
 	}
-	return &VFReader{fp: fp, in: in, gz: gz, dec: dec, last: ""}, nil
+	return &VFReader{fp: fp, dec: dec, last: ""}, nil
 }
 
 type VFReader struct {
 	fp   string
-	in   *os.File
-	gz   *gzip.Reader
 	dec  *gob.Decoder
 	last string
 }
@@ -256,20 +246,16 @@ func (vfr *VFReader) Next() (*FileData, error) {
 }
 
 func (vfr *VFReader) Close() error {
-	if err := vfr.gz.Close(); err != nil {
-		return err
-	}
-	return vfr.in.Close()
+	return nil
 }
 
 func (vm *VMgr) SaveVersion(version time.Time) (FWriter, error) {
 	fp := path.Join(vm.dir, VERSIONS_DIR, MakeVersionFileName(version))
-	tfp := fp + TEMP_FILE_SUFFIX
-	vfw := &VFWriter{fp: fp, tfp: tfp}
+	vfw := &VFWriter{fp: fp, key: vm.key, last: ""}
 	h := &Header{VERSION_MAGIC}
-	err := vfw.WriteVersionFileStart(h, vm.key)
+	vfw.enc = gob.NewEncoder(&vfw.buf)
+	err := vfw.enc.Encode(h)
 	if err != nil {
-		vfw.cleanup()
 		return nil, err
 	}
 	return vfw, nil
@@ -277,37 +263,10 @@ func (vm *VMgr) SaveVersion(version time.Time) (FWriter, error) {
 
 type VFWriter struct {
 	fp   string
-	tfp  string
-	out  *os.File
-	es   *cipher.StreamWriter
-	gz   *gzip.Writer
+	key  *[32]byte
+	buf  bytes.Buffer
 	enc  *gob.Encoder
 	last string
-}
-
-func (vfw *VFWriter) WriteVersionFileStart(h *Header, key []byte) error {
-	out, err := os.Create(vfw.tfp)
-	if err != nil {
-		return err
-	}
-	vfw.out = out
-	var out2 io.Writer = vfw.out
-	if key != nil {
-		es, err := makeEncryptionStream(key, vfw.out)
-		if err != nil {
-			return err
-		}
-		vfw.es = es
-		out2 = vfw.es
-	}
-	vfw.gz = gzip.NewWriter(out2)
-	vfw.enc = gob.NewEncoder(vfw.gz)
-	err = vfw.enc.Encode(h)
-	if err != nil {
-		return err
-	}
-	vfw.last = ""
-	return nil
 }
 
 func (vfw *VFWriter) Write(fd *FileData) error {
@@ -329,40 +288,30 @@ func (vfw *VFWriter) Write(fd *FileData) error {
 	return nil
 }
 
-func (vfw *VFWriter) cleanup() error {
-	err := vfw.gz.Close()
-	if err != nil {
-		return err
-	}
-	if vfw.es != nil {
-		err = vfw.es.Close()
-		if err != nil {
-			return err
-		}
-	} else {
-		err = vfw.out.Close()
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (vfw *VFWriter) Close() error {
-	if err := vfw.cleanup(); err != nil {
+	var ciphertext []byte
+	var err error = nil
+	if vfw.key == nil {
+		ciphertext = gzipBytes(vfw.buf.Bytes())
+	} else {
+		ciphertext, err = encGzipBytes(vfw.key, vfw.buf.Bytes())
+	}
+	if err != nil {
 		return err
 	}
-	err := os.Rename(vfw.tfp, vfw.fp)
+	tfp := vfw.fp + TEMP_FILE_SUFFIX
+	err = ioutil.WriteFile(tfp, ciphertext, 0666)
 	if err != nil {
-		os.Remove(vfw.tfp)
+		return err
+	}
+	err = os.Rename(tfp, vfw.fp)
+	if err != nil {
+		os.Remove(tfp)
 	}
 	return err
 }
 
 func (vfw *VFWriter) Abort() {
-	vfw.cleanup()
-	os.Remove(vfw.tfp)
-	os.Remove(vfw.fp)
 }
 
 func ReduceVersions(cur time.Time, versions []string) []string {

@@ -6,7 +6,8 @@ import (
 	"testing"
 )
 
-func ConfigTestHelper(t *testing.T, key []byte, chunk_size int) {
+func ConfigTestHelper(t *testing.T, key *[32]byte, chunk_size int) {
+	t.Logf("Testing config chunksize %d", chunk_size)
 	cfg := MakeConfig(chunk_size)
 	if cfg.Magic != CONFIG_MAGIC {
 		t.Fatal("cfg.Magic is incorrect:", cfg)
@@ -22,8 +23,9 @@ func ConfigTestHelper(t *testing.T, key []byte, chunk_size int) {
 			t.Fatal("Should not be able to load encrypted config without key")
 		}
 	}
-	bad_key := []byte("d9ksiufhj932098432jflskjflskjflj")
-	_, err = LoadConfig(BKDIR, bad_key)
+	var bad_key [32]byte
+	copy(bad_key[:], []byte("d9ksiufhj932098432jflskjflskjflj"))
+	_, err = LoadConfig(BKDIR, &bad_key)
 	if err == nil {
 		t.Fatal("Should not be able to load config with bad key")
 	}
@@ -40,7 +42,8 @@ func ConfigTestHelper(t *testing.T, key []byte, chunk_size int) {
 func TestConfig(t *testing.T) {
 	ConfigTestHelper(t, nil, 38542)
 	ConfigTestHelper(t, nil, 1)
-	key := []byte("hliehf3209hflkhflaskdhflaksdjhf0")
-	ConfigTestHelper(t, key, 9229283)
-	ConfigTestHelper(t, key, 238493)
+	var key [32]byte
+	copy(key[:], []byte("hliehf3209hflkhflaskdhflaksdjhf0"))
+	ConfigTestHelper(t, &key, 9229283)
+	ConfigTestHelper(t, &key, 238493)
 }
