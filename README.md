@@ -5,17 +5,14 @@ Versioned Encrypted Compressed backup.
 * Backs up multiple versions locally
 * De-duplicates based on content checksums (sha512_256)
 * Compresses backups using gzip
-* Optional symmetric encryption using AES-256
-* Uses little memory and CPU. Works on Raspberry PI 256MB!
+* Optional symmetric encryption using Golang's secretbox (NaCl)
 * Only writes files to backup directory
 * Suitable for remote backup by copying the backup directory using rsync etc
 * Simple fast easy-to-understand single threaded implementation
 * Comprehensive test suite
 * MIT license.
 
-** Release version 0.3 alpha **
-
-** Not compatitble with earlier releases. **
+** Latest master branch is not compatible with earlier releases. **
 
 **Use at your own risk.**
 
@@ -97,7 +94,7 @@ Earlier version was tested with Golang 1.7 on Raspian on Raspberry Pi Model B 25
 ### Q: How are files backed up?
 * Each file is broken into 16MB chunks. The size can be set with -chunksize flag during initialization.
 * Each file is recorded as a list of chunks, metadata and whole file checksum.
-* Each chunk is checksummed (sha512_256), compressed and optionally encrypted using AES-256.
+* Each chunk is checksummed (sha512_256), compressed and optionally encrypted using secretbox (NaCl).
 * Chunks are added and never modified or deleted during the backup operation
 * A version manifest file (named with a RFC3339Nano timestamp) lists all the files for a version of the backup.
 
@@ -147,6 +144,11 @@ Earlier version was tested with Golang 1.7 on Raspian on Raspberry Pi Model B 25
 * **Chunks and version files are encrypted with that key.**
 * **```vecbackup-enc-config``` is encrypted with a key derived from your password using PBKDF2.**
 * **If you lose the ```vecbackup-enc-config``` file, there is no way to recover the data.**
+
+### Q: Did you roll your own encryption scheme?
+* No.
+* Encryption keys are generated from the user's password using PBKDF2 (10,000 rounds).
+* Golang's secretbox (NaCl https://nacl.cr.yp.to/) is used to store all data and metadata.
 
 ### Q: How do I tell vecbackup to skip (ignore) certain files?
 * Create a file named ```vecbackup-ignore``` in the backup directory after running ```vecbackup init```.
