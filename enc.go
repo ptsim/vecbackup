@@ -16,7 +16,7 @@ import (
 	"path"
 )
 
-const PBKDF_ROUNDS = 10000
+const PBKDF_ROUNDS = 100000
 
 func encryptBytes(key *[32]byte, text []byte) ([]byte, error) {
 	// from golang secretbox example
