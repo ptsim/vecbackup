@@ -137,7 +137,7 @@ The latest version was built and tested with Golang 1.11.5 on OSX 10.14.
 
 ### Q: Did you roll your own encryption scheme?
 * No.
-* The 256-bit master encryption key is derived from the user's password using PBKDF2 (10,000 rounds).
+* The 256-bit master encryption key is derived from the user's password using PBKDF2 (100,000 rounds).
 * The 256-bit storage encryption key is randomly generated and encrypted using the master encryption key.
 * All encrypted data is stored using Golang's secretbox module.
 * Secretbox provides authenticated encryption and is interoperable with NaCl (https://nacl.cr.yp.to/).
