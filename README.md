@@ -5,7 +5,7 @@ Versioned Encrypted Compressed backup.
 * Backs up multiple versions locally
 * De-duplicates based on content checksums (sha512_256)
 * Compresses backups (gzip)
-* Optionally password protect and encrypt backups with authenticated encryption (NaCl)
+* Optionally password protect and encrypt backups with authenticated encryption (PBKDF2+NaCl)
 * MIT license.
 
 **Disclaimer: Use at your own risk.**
