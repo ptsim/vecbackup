@@ -617,16 +617,12 @@ func verifyChunks(cm ChunkMgr, buf *Buf, counts map[string]int) (numChunks, numO
 
 func setup(bkDir string, pwFile string) (string, VersionMgr, ChunkMgr, *Config, error) {
 	bkDir = filepath.Clean(bkDir)
-	key, err := GetKey(pwFile, bkDir)
+	cfg, err := GetConfig(pwFile, bkDir)
 	if err != nil {
 		return bkDir, nil, nil, nil, err
 	}
-	vm := MakeVersionMgr(bkDir, key)
-	cm := MakeChunkMgr(bkDir, key)
-	cfg, err := LoadConfig(bkDir, key)
-	if err != nil {
-		return bkDir, nil, nil, nil, err
-	}
+	vm := MakeVersionMgr(bkDir, cfg.EncryptionKey)
+	cm := MakeChunkMgr(bkDir, cfg.EncryptionKey)
 	return bkDir, vm, cm, cfg, nil
 }
 
@@ -665,13 +661,11 @@ func doInit(flags *Flags, bkDir string) error {
 	if err != nil {
 		return errors.New(fmt.Sprintf("Cannot create backup dir: %s", err))
 	}
-	err = WriteNewEncConfig(flags.pwFile, bkDir)
+	cfg := MakeConfig(flags.chunkSize)
+	err = WriteNewConfig(flags.pwFile, bkDir, cfg)
 	if err != nil {
 		return errors.New(fmt.Sprintf("Cannot write encypted config file: %s", err))
 	}
-	key, err := GetKey(flags.pwFile, bkDir)
-	cfg := MakeConfig(flags.chunkSize)
-	err = SaveConfig(cfg, bkDir, key)
 	return err
 }
 

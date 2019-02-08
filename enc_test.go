@@ -49,12 +49,25 @@ func testEncrypt(t *testing.T, key, plaintext []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
+	ciphertext2, err := encryptBytes(&k, plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Compare(ciphertext, ciphertext2) == 0 {
+		t.Fatal("Same ciphertext")
+	}
 	result, err := decryptBytes(&k, ciphertext)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Compare(result, plaintext) != 0 {
+		t.Fatal("result does not match plaintext\n")
+	}
+	result2, err := decryptBytes(&k, ciphertext2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Compare(result2, plaintext) != 0 {
 		t.Fatal("result does not match plaintext\n")
 	}
 	t.Logf("testEncryptSB succeeded with plaintext len: %d, cipherlen: %d, overhead: %d", len(plaintext), len(ciphertext), len(ciphertext)-len(plaintext))
@@ -66,12 +79,26 @@ func testEncGzip(t *testing.T, key, plaintext []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ciphertext2, err := encGzipBytes(&k, plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Compare(ciphertext, ciphertext2) == 0 {
+		t.Fatal("Same ciphertext")
+	}
 
 	result, err := decGunzipBytes(&k, ciphertext)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Compare(result, plaintext) != 0 {
+		t.Fatal("result does not match plaintext\n")
+	}
+	result2, err := decGunzipBytes(&k, ciphertext2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Compare(result2, plaintext) != 0 {
 		t.Fatal("result does not match plaintext\n")
 	}
 	t.Logf("testEncGzipSB succeeded with plaintext len: %d, cipherlen: %d, overhead: %d", len(plaintext), len(ciphertext), len(ciphertext)-len(plaintext))

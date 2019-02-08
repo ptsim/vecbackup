@@ -33,10 +33,13 @@ type FileType int
 type CS []byte
 
 const (
-	VERSION_MAGIC          = "PTVBKVSN"
-	REGULAR_FILE  FileType = iota
-	DIRECTORY
-	SYMLINK
+	VERSION_MAGIC = "PTVBKVSN"
+)
+
+const (
+	REGULAR_FILE FileType = 0
+	DIRECTORY             = 1
+	SYMLINK               = 2
 )
 
 //---------------------------------------------------------------------------
