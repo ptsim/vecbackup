@@ -38,6 +38,7 @@ func setupTest(t testing.TB, name string) func() {
 	flags.pwFile = ""
 	flags.out = ioutil.Discard
 	flags.chunkSize = DEFAULT_CHUNK_SIZE
+	flags.pbkdf2Iterations = DEFAULT_PBKDF2_ITERATIONS
 
 	removeAll(t, SRCDIR)
 	removeAll(t, BKDIR)

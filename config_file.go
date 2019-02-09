@@ -25,11 +25,12 @@ type Config struct {
 }
 
 type EncConfig struct {
-	Magic          string
-	Version        int
-	EncryptionType int
-	Salt           []byte
-	Config         []byte
+	Magic            string
+	Version          int
+	EncryptionType   int
+	PBKDF2Iterations int
+	Salt             []byte
+	Config           []byte
 }
 
 const (
@@ -145,7 +146,7 @@ func writeEncConfig(fp string, ec *EncConfig) error {
 	return out.Close()
 }
 
-func makeEncConfig(pwFile string, cfg *Config) (*EncConfig, error) {
+func makeEncConfig(pwFile string, rounds int, cfg *Config) (*EncConfig, error) {
 	if cfg.EncryptionKey != nil {
 		return nil, errors.New("Encryption key is not empty in Config")
 	}
@@ -160,7 +161,7 @@ func makeEncConfig(pwFile string, cfg *Config) (*EncConfig, error) {
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("Cannot read password file: %s", pwFile))
 	}
-	salt, masterKey, storageKey, err := GenKey(pw)
+	salt, masterKey, storageKey, err := GenKey(pw, rounds)
 	if err != nil {
 		return nil, err
 	}
@@ -173,11 +174,11 @@ func makeEncConfig(pwFile string, cfg *Config) (*EncConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &EncConfig{Magic: ENC_CONFIG_MAGIC, Version: VBK_VERSION, EncryptionType: SYMMETRIC_ENCRYPTION, Salt: salt, Config: encCfg}, nil
+	return &EncConfig{Magic: ENC_CONFIG_MAGIC, Version: VBK_VERSION, EncryptionType: SYMMETRIC_ENCRYPTION, PBKDF2Iterations: rounds, Salt: salt, Config: encCfg}, nil
 }
 
-func WriteNewConfig(pwFile, bkDir string, cfg *Config) error {
-	encCfg, err := makeEncConfig(pwFile, cfg)
+func WriteNewConfig(pwFile, bkDir string, rounds int, cfg *Config) error {
+	encCfg, err := makeEncConfig(pwFile, rounds, cfg)
 	if err != nil {
 		return err
 	}
@@ -209,7 +210,7 @@ func GetConfig(pwFile, bkDir string) (*Config, error) {
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("Cannot read pw file: %s", err))
 	}
-	masterKey := GetMasterKey(pw, ec.Salt)
+	masterKey := GetMasterKey(pw, ec.Salt, ec.PBKDF2Iterations)
 	configBytes, err := decryptBytes(masterKey, ec.Config)
 	cfg, err := configFromBytes(configBytes)
 	if err != nil {

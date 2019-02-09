@@ -15,7 +15,7 @@ func EncConfigTestHelper(t *testing.T, tmpDir, pwFile, badPwFile string, chunk_s
 	}
 	_ = os.Remove(path.Join(tmpDir, CONFIG_FILE))
 	defer os.Remove(path.Join(tmpDir, CONFIG_FILE))
-	err := WriteNewConfig(pwFile, tmpDir, cfg)
+	err := WriteNewConfig(pwFile, tmpDir, DEFAULT_PBKDF2_ITERATIONS, cfg)
 	if err != nil {
 		t.Fatal("Cannot save config:", err)
 	}

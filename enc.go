@@ -12,8 +12,6 @@ import (
 	"io/ioutil"
 )
 
-const PBKDF_ROUNDS = 100000
-
 func encryptBytes(key *[32]byte, text []byte) ([]byte, error) {
 	// from golang secretbox example
 	// You must use a different nonce for each message you encrypt with the
@@ -77,12 +75,12 @@ func gunzipBytes(gzipText []byte) ([]byte, error) {
 	return ioutil.ReadAll(gz)
 }
 
-func GenKey(pw []byte) ([]byte, *[32]byte, *[32]byte, error) {
+func GenKey(pw []byte, rounds int) ([]byte, *[32]byte, *[32]byte, error) {
 	salt := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
 		return nil, nil, nil, err
 	}
-	key := pbkdf2.Key(pw, salt, PBKDF_ROUNDS, 32, sha1.New)
+	key := pbkdf2.Key(pw, salt, rounds, 32, sha1.New)
 	var masterKey [32]byte
 	copy(masterKey[:], key)
 	var storageKey [32]byte
@@ -92,8 +90,8 @@ func GenKey(pw []byte) ([]byte, *[32]byte, *[32]byte, error) {
 	return salt, &masterKey, &storageKey, nil
 }
 
-func GetMasterKey(pw, salt []byte) *[32]byte {
-	key := pbkdf2.Key(pw, salt, PBKDF_ROUNDS, 32, sha1.New)
+func GetMasterKey(pw, salt []byte, rounds int) *[32]byte {
+	key := pbkdf2.Key(pw, salt, rounds, 32, sha1.New)
 	var masterKey [32]byte
 	copy(masterKey[:], key)
 	return &masterKey

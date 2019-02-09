@@ -20,17 +20,18 @@ import (
 )
 
 const (
-	DEFAULT_CHUNK_SIZE      = 16 * 1024 * 1024
-	CHUNK_DIR_DEPTH         = 3
-	VERSION_FILENAME_PREFIX = "vecbackup-version-"
-	IGNORE_FILENAME         = "vecbackup-ignore"
-	LOCK_FILENAME           = "vecbackup-lock"
-	TEMP_FILE_SUFFIX        = "-temp"
-	CHUNK_DIR               = "chunks"
-	VERSIONS_DIR            = "versions"
-	DEFAULT_DIR_PERM        = 0777
-	DEFAULT_FILE_PERM       = 0666
-	PATH_SEP                = string(os.PathSeparator)
+	DEFAULT_CHUNK_SIZE        = 16 * 1024 * 1024
+	DEFAULT_PBKDF2_ITERATIONS = 100000
+	CHUNK_DIR_DEPTH           = 3
+	VERSION_FILENAME_PREFIX   = "vecbackup-version-"
+	IGNORE_FILENAME           = "vecbackup-ignore"
+	LOCK_FILENAME             = "vecbackup-lock"
+	TEMP_FILE_SUFFIX          = "-temp"
+	CHUNK_DIR                 = "chunks"
+	VERSIONS_DIR              = "versions"
+	DEFAULT_DIR_PERM          = 0777
+	DEFAULT_FILE_PERM         = 0666
+	PATH_SEP                  = string(os.PathSeparator)
 )
 
 //---------------------------------------------------------------------------
@@ -645,6 +646,9 @@ func removeLockfile(lfn string) {
 //---------------------------------------------------------------------------
 
 func doInit(flags *Flags, bkDir string) error {
+	if flags.pbkdf2Iterations < 100000 {
+		return errors.New(fmt.Sprintf("Too few PBKDF2 iterations, minimum 100,000: %d", flags.pbkdf2Iterations))
+	}
 	bkDir = filepath.Clean(bkDir)
 	if nodeExists(bkDir) {
 		return errors.New(fmt.Sprintf("Backup directory already exist: %s", bkDir))
@@ -662,7 +666,7 @@ func doInit(flags *Flags, bkDir string) error {
 		return errors.New(fmt.Sprintf("Cannot create backup dir: %s", err))
 	}
 	cfg := MakeConfig(flags.chunkSize)
-	err = WriteNewConfig(flags.pwFile, bkDir, cfg)
+	err = WriteNewConfig(flags.pwFile, bkDir, flags.pbkdf2Iterations, cfg)
 	if err != nil {
 		return errors.New(fmt.Sprintf("Cannot write encypted config file: %s", err))
 	}
@@ -987,8 +991,11 @@ func doPurgeOldData(flags *Flags, bkDir string) error {
 
 func usageAndExit() {
 	fmt.Fprintf(os.Stderr, `Usage:
-  vecbackup init [-pw <pwfile>] [-chunksize size] <backupdir>
+  vecbackup init [-pw <pwfile>] [-chunksize size] [-pbkdf2iterations num] <backupdir>
       -chunksize    files are broken into chunks of this size.
+      -pbkdf2iterations
+                    number of iterations for PBKDF2 key generation.
+                    Minimum 100,000.
     Initialize a new backup directory.
 
   vecbackup backup [-v] [-cs] [-n] [-setversion <version>] [-pw <pwfile>] <backupdir> <srcdir> [<subpath> ...]
@@ -1014,7 +1021,7 @@ func usageAndExit() {
     Recovers all the items or the given <subpaths> to <recoverydir>.
     <recoverydir> must not already exist.
       -n            dry run, show what would have been recovered
-      -t            test run, test recovering the files but don't write
+     -t            test run, test recovering the files but don't write
       -version <version>
                     recover that given version. Defaults to "latest"
       -merge        merge the recovered files into the given <recoverydir>
@@ -1068,16 +1075,17 @@ var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 var memprofile = flag.String("memprofile", "", "write memory profile to `file`")
 
 type Flags struct {
-	verbose    bool
-	checksum   bool
-	dryRun     bool
-	testRun    bool
-	setVersion string
-	version    string
-	merge      bool
-	pwFile     string
-	out        io.Writer
-	chunkSize  int
+	verbose          bool
+	checksum         bool
+	dryRun           bool
+	testRun          bool
+	setVersion       string
+	version          string
+	merge            bool
+	pwFile           string
+	out              io.Writer
+	chunkSize        int
+	pbkdf2Iterations int
 }
 
 func InitFlags() *Flags {
@@ -1092,6 +1100,7 @@ func InitFlags() *Flags {
 	flag.StringVar(&flags.pwFile, "pw", "", "File containing password")
 	flags.out = os.Stdout
 	flag.IntVar(&flags.chunkSize, "chunksize", DEFAULT_CHUNK_SIZE, "Chunk size")
+	flag.IntVar(&flags.pbkdf2Iterations, "pbkdf2iterations", DEFAULT_PBKDF2_ITERATIONS, "PBKDF2 iteration count")
 	log.SetFlags(0)
 	return flags
 }
