@@ -127,6 +127,7 @@ The latest version was built and tested with Golang 1.11.5 on OSX 10.14.
 * Use ```-pw <path_to_your_password_file>``` for all commands. For example:
 
 ```vecbackup init -pw /a/mybkpw /b/mybackup```
+* Use the ```-pbkdf2iterations <num>``` flag for the init command to set how slow key generation and key verification is. The larger the number, the slower it is. Default and minimum 100,000.
 * If you lose your password, there is almost no way to recover the data in the backup.
 
  recover the data.**
@@ -137,7 +138,7 @@ The latest version was built and tested with Golang 1.11.5 on OSX 10.14.
 
 ### Q: Did you roll your own encryption scheme?
 * No.
-* The 256-bit master encryption key is derived from the user's password using PBKDF2 (100,000 rounds).
+* The 256-bit master encryption key is derived from the user's password using PBKDF2.
 * The 256-bit storage encryption key is randomly generated and encrypted using the master encryption key.
 * All encrypted data is stored using Golang's secretbox module.
 * Secretbox provides authenticated encryption and is interoperable with NaCl (https://nacl.cr.yp.to/).
