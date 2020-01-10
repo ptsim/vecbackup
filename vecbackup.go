@@ -991,6 +991,22 @@ func doPurgeOldData(flags *Flags, bkDir string) error {
 
 func usageAndExit() {
 	fmt.Fprintf(os.Stderr, `Usage:
+  vecbackup help
+  vecbackup init [-pw <pwfile>] [-chunksize size] [-pbkdf2iterations num] <backupdir>
+  vecbackup backup [-v] [-cs] [-n] [-setversion <version>] [-pw <pwfile>] <backupdir> <srcdir> [<subpath> ...]
+  vecbackup versions [-pw <pwfile>] <backupdir>
+  vecbackup recover [-n] [-t] [-version <version>] [-merge] [-pw <pwfile>] <backupdir> <recoverydir> [<subpath> ...]
+  vecbackup delete-version [-pw <pwfile>] <backupdir> <version>
+  vecbackup delete-old-versions [-n] [-pw <pwfile>] <backupdir>
+  vecbackup verify-backups [-pw <pwfile>] <backupdir>
+  vecbackup purge-old-data [-pw <pwfile>] <backupdir>
+`)
+	os.Exit(1)
+}
+
+func usageStdoutAndExit() {
+	fmt.Fprintf(os.Stdout, `Usage:
+  vecbackup help
   vecbackup init [-pw <pwfile>] [-chunksize size] [-pbkdf2iterations num] <backupdir>
       -chunksize    files are broken into chunks of this size.
       -pbkdf2iterations
@@ -1139,6 +1155,8 @@ func main() {
 			usageAndExit()
 		}
 		exitIfError(doInit(flags, flag.Arg(0)))
+	} else if cmd == "help" {
+		usageStdoutAndExit()
 	} else if cmd == "backup" {
 		if flag.NArg() < 2 {
 			usageAndExit()
