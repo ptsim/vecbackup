@@ -28,7 +28,7 @@ To see the timestamps of previous backups:
 
 To list the files in the backup:
 
-```vecbackup files /b/mybackup```
+```vecbackup ls /b/mybackup```
 
 To recover the latest backup to ```/a/temp```:
 
@@ -46,15 +46,15 @@ To recover an older version of the same file:
 
 ```vecbackup recover -version <version_timestamp> /b/mybackup /a/temp dir/something.doc```
 
-To verify that the backup files are not corrupted:
+To verify that the all backup files of all versions are not corrupted:
 
-```vecbackup verify-backups /b/mybackup```
+```vecbackup verifybackups /b/mybackup```
 
 To delete old backup versions and reuse the space:
 
-```vecbackup delete-old-versions /b/mybackup```
+```vecbackup deleteoldversions /b/mybackup```
 
-```vecbackup purge-old-data /b/mybackup```
+```vecbackup purgeunused /b/mybackup```
 
 ## How to install?
 
@@ -80,7 +80,8 @@ The latest version was built and tested with Golang 1.11.5 on OSX 10.14.
 ## FAQ
 
 ### Q: How do I see all the options?
-* Just run ```vecbackup``` and it will print all the commands and options.
+* Run ```vecbackup``` to print all the commands and options.
+* Run ```vecbackup help``` for more detailed description of all the commands.
 
 ### Q: How are files backed up?
 * Each file is broken into 16MB chunks. The size can be set with -chunksize flag during initialization.
@@ -130,8 +131,6 @@ The latest version was built and tested with Golang 1.11.5 on OSX 10.14.
 * Use the ```-pbkdf2iterations <num>``` flag for the init command to set how slow key generation and key verification is. The larger the number, the slower it is. Default and minimum 100,000.
 * If you lose your password, there is almost no way to recover the data in the backup.
 
- recover the data.**
-
 ### Q: What is the encryption for?
 * So that I can copy the backups to "unsafe" remote, cloud or offline storage.
 * With authenticated encryption, I can be sure the backup files have not been modified accidentially or intentionally.
@@ -146,7 +145,7 @@ The latest version was built and tested with Golang 1.11.5 on OSX 10.14.
 ## Q: How do I tell vecbackup to skip (ignore) certain files?
 * Create a file named ```vecbackup-ignore``` in the backup directory after running ```vecbackup init```.
 * Each line in the file is a pattern containing files to ignore.
-* Run ```vecbackup``` for more details.
+* Run ```vecbackup help``` for more details.
 * Example file:
 ``` 
 .DS_Store
@@ -157,16 +156,16 @@ The latest version was built and tested with Golang 1.11.5 on OSX 10.14.
 ### Q: Just show me the effects of the operations, aka dry run mode?
 * ```vecbackup backup -n ...```
 * ```vecbackup recover -n ...```
-* ```vecbackup delete-old-versions -n ...```
+* ```vecbackup deleteoldversions -n ...```
 
-### Q: Which older versions are kept for ```vecbackup delete-old-versions```?
+### Q: Which older versions are kept for ```vecbackup deleteoldversions```?
 * Keeps all versions within one day
 * Keep one version per hour for the last week
 * Keep one version per day in the last month
 * Keep one version per week in the last year
 * Keep one version per month otherwise
 * All extra versions are deleted
-* The unused chunk files are not deleted until you run ```vecbackup purge-old-data```.
+* The unused chunk files are not deleted until you run ```vecbackup purgeunused```.
 
 ### Q: Why don't you use XYZ software instead?
 * Because various XYZ software have limitations that do not meet my requirements.
@@ -175,7 +174,7 @@ The latest version was built and tested with Golang 1.11.5 on OSX 10.14.
 * **This is an alpha release.**
 * **The backup file format is still subject to change.**
 * **Use at your own risk.**
-* Having said that, I have been using it for a few years **in conjunction** with other backup software.
+* Having said that, I have been using it for a few years **in conjunction** with other backup software. I regularly test recovering important data from the backups.
 
 ### Q: What do you use this for?
 * I use this to backup all my data, mostly consisting of terabytes of irreplaceable photos and videos.
