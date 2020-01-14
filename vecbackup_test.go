@@ -142,10 +142,10 @@ func (e *TestEnv) verifyBackups() (numChunks, numOk, numFailed, numUnused int) {
 	return r.numChunks, r.numOk, r.numFailed, r.numUnused
 }
 
-func (e *TestEnv) purgeOldData() string {
+func (e *TestEnv) purgeUnused() string {
 	var b bytes.Buffer
 	flags.out = &b
-	e.failIfError("purgeOldData", doPurgeOldData(flags, BKDIR))
+	e.failIfError("purgeUnused", doPurgeUnused(flags, BKDIR))
 	return b.String()
 }
 
@@ -238,7 +238,7 @@ func (e *TestEnv) files(version string) []string {
 	flags.version = version
 	var b bytes.Buffer
 	flags.out = &b
-	e.failIfError("files", doFiles(flags, BKDIR))
+	e.failIfError("ls", doLs(flags, BKDIR))
 	r := strings.Split(b.String(), "\n")
 	return r[:len(r)-1]
 }
@@ -1026,7 +1026,7 @@ func TestT19(t *testing.T) {
 		e.recover()
 		e.checkSame()
 		v := e.versions()
-		e.purgeOldData()
+		e.purgeUnused()
 		numChunks, numOk, numFailed, numUnused = e.verifyBackups()
 		e.t.Logf("%d numChunks %d numOk, %d numFailed, %d numUnused", numChunks, numOk, numFailed, numUnused)
 		if numFailed != 0 || numUnused != 0 {
@@ -1046,7 +1046,7 @@ func TestT19(t *testing.T) {
 		if numUnused == 0 {
 			e.t.Fatal("Number of unused chunks should be more than zero")
 		}
-		e.purgeOldData()
+		e.purgeUnused()
 		numChunks, numOk, numFailed, numUnused = e.verifyBackups()
 		e.t.Logf("%d numChunks %d numOk, %d numFailed, %d numUnused", numChunks, numOk, numFailed, numUnused)
 		if numFailed != 0 || numUnused != 0 {
@@ -1061,7 +1061,7 @@ func TestT19(t *testing.T) {
 		if numUnused == 0 {
 			e.t.Fatalf("Number of unused chunks should be more than zero")
 		}
-		e.purgeOldData()
+		e.purgeUnused()
 		numChunks, numOk, numFailed, numUnused = e.verifyBackups()
 		e.t.Logf("%d numChunks %d numOk, %d numFailed, %d numUnused", numChunks, numOk, numFailed, numUnused)
 		if numChunks != 0 || numOk != 0 || numFailed != 0 || numUnused != 0 {
@@ -1126,8 +1126,8 @@ func totalTest(t *testing.T, n int, pw string) {
 		td += tf("CheckSame completed", func() {
 			e.checkSame()
 		})
-		td += tf("Purge-old-data completed", func() {
-			e.t.Log(e.purgeOldData())
+		td += tf("PurgeUnused completed", func() {
+			e.t.Log(e.purgeUnused())
 		})
 		td += tf("Verify backups completed", func() {
 			numChunks, numOk, numFailed, numUnused := e.verifyBackups()

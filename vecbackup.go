@@ -802,7 +802,7 @@ func doRecover(flags *Flags, bkDir, recDir string, patterns []string) error {
 	return nil
 }
 
-func doFiles(flags *Flags, bkDir string) error {
+func doLs(flags *Flags, bkDir string) error {
 	bkDir, vm, _, _, err := setup(bkDir, flags.pwFile)
 	if err != nil {
 		return err
@@ -925,7 +925,7 @@ func doVerifyBackups(flags *Flags, bkDir string, r *verifyBackupResults) error {
 	return nil
 }
 
-func doPurgeOldData(flags *Flags, bkDir string) error {
+func doPurgeUnused(flags *Flags, bkDir string) error {
 	bkDir, vm, cm, _, err := setup(bkDir, flags.pwFile)
 	if err != nil {
 		return err
@@ -994,12 +994,13 @@ func usageAndExit() {
   vecbackup help
   vecbackup init [-pw <pwfile>] [-chunksize size] [-pbkdf2iterations num] <backupdir>
   vecbackup backup [-v] [-cs] [-n] [-setversion <version>] [-pw <pwfile>] <backupdir> <srcdir> [<subpath> ...]
+  vecbackup ls [-version <version>] [-pw <pwfile>] <backupdir>
   vecbackup versions [-pw <pwfile>] <backupdir>
   vecbackup recover [-n] [-t] [-version <version>] [-merge] [-pw <pwfile>] <backupdir> <recoverydir> [<subpath> ...]
-  vecbackup delete-version [-pw <pwfile>] <backupdir> <version>
-  vecbackup delete-old-versions [-n] [-pw <pwfile>] <backupdir>
-  vecbackup verify-backups [-pw <pwfile>] <backupdir>
-  vecbackup purge-old-data [-pw <pwfile>] <backupdir>
+  vecbackup deleteversion [-pw <pwfile>] <backupdir> <version>
+  vecbackup deleteoldversions [-n] [-pw <pwfile>] <backupdir>
+  vecbackup verifybackups [-pw <pwfile>] <backupdir>
+  vecbackup purgeunused [-pw <pwfile>] <backupdir>
 `)
 	os.Exit(1)
 }
@@ -1025,11 +1026,12 @@ func usageStdoutAndExit() {
       -cs           use checksums to detect if files have changed
       -n            dry run, show what would have been backed up
       -setversion   save as the given version, instead of the current time
+
   vecbackup versions [-pw <pwfile>] <backupdir>
     Lists all backup versions in chronological order. The version name is a
     timestamp in UTC formatted with RFC3339Nano format (YYYY-MM-DDThh:mm:ssZ).
 
-  vecbackup files [-version <version>] [-pw <pwfile>] <backupdir>
+  vecbackup ls [-version <version>] [-pw <pwfile>] <backupdir>
     Lists files in <backupdir>.
     -version <version>   list the files in that version
 
@@ -1037,7 +1039,7 @@ func usageStdoutAndExit() {
     Recovers all the items or the given <subpaths> to <recoverydir>.
     <recoverydir> must not already exist.
       -n            dry run, show what would have been recovered
-     -t            test run, test recovering the files but don't write
+      -t            test run, test recovering the files but don't write
       -version <version>
                     recover that given version. Defaults to "latest"
       -merge        merge the recovered files into the given <recoverydir>
@@ -1162,11 +1164,11 @@ func main() {
 			usageAndExit()
 		}
 		exitIfError(doBackup(flags, flag.Arg(0), flag.Arg(1), flag.Args()[2:]))
-	} else if cmd == "files" {
+	} else if cmd == "ls" {
 		if flag.NArg() != 1 {
 			usageAndExit()
 		}
-		exitIfError(doFiles(flags, flag.Arg(0)))
+		exitIfError(doLs(flags, flag.Arg(0)))
 	} else if cmd == "recover" {
 		if flag.NArg() < 2 {
 			usageAndExit()
@@ -1177,26 +1179,26 @@ func main() {
 			usageAndExit()
 		}
 		exitIfError(doVersions(flags, flag.Arg(0)))
-	} else if cmd == "delete-version" {
+	} else if cmd == "deleteversion" {
 		if flag.NArg() != 2 {
 			usageAndExit()
 		}
 		exitIfError(doDeleteVersion(flags, flag.Arg(0), flag.Arg(1)))
-	} else if cmd == "delete-old-versions" {
+	} else if cmd == "deleteoldversions" {
 		if flag.NArg() != 1 {
 			usageAndExit()
 		}
 		exitIfError(doDeleteOldVersions(flags, flag.Arg(0)))
-	} else if cmd == "verify-backups" {
+	} else if cmd == "verifybackups" {
 		if flag.NArg() != 1 {
 			usageAndExit()
 		}
 		exitIfError(doVerifyBackups(flags, flag.Arg(0), nil))
-	} else if cmd == "purge-old-data" {
+	} else if cmd == "purgeunused" {
 		if flag.NArg() != 1 {
 			usageAndExit()
 		}
-		exitIfError(doPurgeOldData(flags, flag.Arg(0)))
+		exitIfError(doPurgeUnused(flags, flag.Arg(0)))
 	} else {
 		usageAndExit()
 	}
