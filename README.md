@@ -69,7 +69,7 @@ Not tested on Windows.
 ## How to build?
 
 * Install golang.
-* Clone this repository.
+* ```go get github.com/ptsim/vecbackup```
 * ```go build```
 * ```go test``` (or ```go test -longtest```)
 
