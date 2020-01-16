@@ -58,7 +58,7 @@ To delete old backup versions and reuse the space:
 
 ## How to install?
 
-Download the OS X latest release here:
+Download the latest OS X or Linux release here:
 https://github.com/ptsim/vecbackup/releases
 
 For other systems, try building from source.
