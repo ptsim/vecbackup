@@ -1,4 +1,4 @@
-package main
+package vecbackup
 
 import (
 	"io/ioutil"

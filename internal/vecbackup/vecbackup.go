@@ -1,4 +1,4 @@
-package main
+package vecbackup
 
 import (
 	"bufio"
@@ -1136,7 +1136,7 @@ func exitIfError(err error) {
 	}
 }
 
-func main() {
+func Main() {
 	flags := InitFlags()
 	if len(os.Args) < 2 {
 		usageAndExit()
