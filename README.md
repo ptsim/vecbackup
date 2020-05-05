@@ -69,13 +69,12 @@ Not tested on Windows.
 ## How to build?
 
 * Install golang.
-* ```go get github.com/ptsim/vecbackup```
-* ```go build```
-* ```go test``` (or ```go test -longtest```)
+* ```git clone https://github.com/ptsim/vecbackup.git```
+* ```cd vecbackup```
+* ```go test ./...``` (or ```go test ./... -longtest```)
+* ```go build ./cmd/vecbackup```
 
 You will find the ```vecbackup``` binary in the current directory.
-
-The latest version was built and tested with Golang 1.11.5 on OSX 10.14.
 
 ## FAQ
 
