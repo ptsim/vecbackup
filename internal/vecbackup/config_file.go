@@ -2,219 +2,163 @@ package vecbackup
 
 import (
 	"bytes"
-	"encoding/gob"
 	"errors"
 	"fmt"
+	"google.golang.org/protobuf/proto"
+	"io"
 	"io/ioutil"
 	"os"
 	"path"
 )
 
-const (
-	CONFIG_MAGIC     = "PTVBKCFG"
-	ENC_CONFIG_MAGIC = "PTVBKCFGENC"
-	VBK_VERSION      = 1
-	CONFIG_FILE      = "vecbackup-config"
-)
-
 type Config struct {
-	EncryptionKey *[32]byte
-	Magic         string
-	Version       int
-	ChunkSize     int
+	ChunkSize     int32
+	Compress      CompressionMode
+	EncryptionKey *EncKey
+	FPSecret      []byte
 }
-
-type EncConfig struct {
-	Magic            string
-	Version          int
-	EncryptionType   int
-	PBKDF2Iterations int
-	Salt             []byte
-	Config           []byte
-}
-
-const (
-	NO_ENCRYPTION        = 0
-	SYMMETRIC_ENCRYPTION = 1
-)
 
 //---------------------------------------------------------------------------
-func MakeConfig(chunk_size int) *Config {
-	return &Config{EncryptionKey: nil, Magic: CONFIG_MAGIC, Version: VBK_VERSION, ChunkSize: chunk_size}
+func checkConfig(cfg *Config, encrypted bool) {
+	if encrypted {
+		if cfg.EncryptionKey == nil {
+			panic("Internal error, invalid encryption key.")
+		}
+		if cfg.FPSecret == nil || len(cfg.FPSecret) < 64 {
+			panic("Internal error, invalid secret.")
+		}
+	} else {
+		if cfg.EncryptionKey != nil || cfg.FPSecret != nil {
+			panic("Internal error, extra key")
+		}
+	}
 }
 
-func checkConfig(cfg *Config) error {
-	if cfg.Magic != CONFIG_MAGIC {
-		return errors.New("Invalid config file: missing magic string")
+func configToBytes(cfg *Config, encrypted bool) ([]byte, error) {
+	checkConfig(cfg, encrypted)
+	cp := ConfigProto{ChunkSize: cfg.ChunkSize, Compress: cfg.Compress}
+	if encrypted {
+		cp.FPSecret = cfg.FPSecret
+		cp.EncryptionKey = cfg.EncryptionKey[:]
 	}
-	if cfg.Version != VBK_VERSION {
-		return errors.New(fmt.Sprintf("Unsupported backup version %d, expecting version %d", cfg.Version, VBK_VERSION))
-	}
-	return nil
+	return proto.Marshal(&cp)
 }
 
-func configToBytes(cfg *Config) ([]byte, error) {
-	err := checkConfig(cfg)
-	if err != nil {
+func configFromBytes(b []byte, encrypted bool) (*Config, error) {
+	cp := ConfigProto{}
+	if err := proto.Unmarshal(b, &cp); err != nil {
 		return nil, err
 	}
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	err = enc.Encode(cfg)
-	if err != nil {
-		return nil, err
+	cfg := &Config{ChunkSize: cp.ChunkSize, Compress: cp.Compress}
+	if encrypted {
+		cfg.FPSecret = cp.FPSecret
+		if len(cp.EncryptionKey) != 32 {
+			return nil, errors.New("Invalid encryption key in config file.")
+		}
+		var mykey EncKey
+		copy(mykey[:], cp.EncryptionKey)
+		cfg.EncryptionKey = &mykey
 	}
-	return buf.Bytes(), nil
-}
-
-func configFromBytes(b []byte) (*Config, error) {
-	buf := bytes.NewBuffer(b)
-	dec := gob.NewDecoder(buf)
-	cfg := &Config{}
-	dec.Decode(cfg)
-	err := checkConfig(cfg)
-	if err != nil {
-		return nil, err
-	}
+	checkConfig(cfg, encrypted)
 	return cfg, nil
 }
 
-func EqualConfig(cfg1, cfg2 *Config) bool {
-	return cfg1.Magic == cfg2.Magic && cfg1.Version == cfg2.Version && cfg1.ChunkSize == cfg2.ChunkSize && EqualKey(cfg1.EncryptionKey, cfg2.EncryptionKey)
-}
-
-func EqualKey(k1, k2 *[32]byte) bool {
-	if k1 == nil || k2 == nil {
-		return k1 == k2
-	}
-	return bytes.Compare(k1[:], k2[:]) == 0
-}
-
-func checkEncConfig(ec *EncConfig) error {
-	if ec.Magic != ENC_CONFIG_MAGIC {
-		return errors.New("Invalid enc config: missing magic string")
-	}
-	if ec.Version != VBK_VERSION {
-		return errors.New(fmt.Sprintf("Unsupported backup version %d, expecting version %d", ec.Version, VBK_VERSION))
-	}
-	if ec.EncryptionType != NO_ENCRYPTION && ec.EncryptionType != SYMMETRIC_ENCRYPTION {
-		return errors.New(fmt.Sprintf("Unsupposed encryption method: %d", ec.EncryptionType))
-	}
-	if ec.EncryptionType == SYMMETRIC_ENCRYPTION {
-		if len(ec.Salt) == 0 {
-			return errors.New("Invalid enc config: Missing salt")
-		}
-	}
-	return nil
-}
-
-func readEncConfig(fp string) (*EncConfig, error) {
+func readEncConfig(fp string) (*EncConfigProto, error) {
 	in, err := os.Open(fp)
 	if err != nil {
 		return nil, err
 	}
 	defer in.Close()
-	dec := gob.NewDecoder(in)
-	ec := &EncConfig{}
-	dec.Decode(ec)
-	err = checkEncConfig(ec)
-	if err != nil {
-		return nil, err
+	ec := EncConfigProto{}
+	var h [len(VC_MAGIC)]byte
+	if _, err := io.ReadFull(in, h[:]); err != nil || bytes.Compare(h[:], []byte(VC_MAGIC)) != 0 {
+		return nil, errors.New("Invalid config file")
 	}
-	return ec, nil
+	if b, err := ioutil.ReadAll(in); err != nil {
+		return nil, err
+	} else {
+		if err := proto.Unmarshal(b, &ec); err != nil {
+			return nil, err
+		}
+	}
+	if ec.Version != VC_VERSION {
+		return nil, errors.New("Incompatible config file.")
+	}
+	return &ec, nil
 }
 
-func writeEncConfig(fp string, ec *EncConfig) error {
-	err := checkEncConfig(ec)
+func writeEncConfig(fp string, t EncType, iterations int64, salt, config []byte) error {
+	ec := EncConfigProto{Version: VC_VERSION, Type: t, Iterations: iterations, Salt: salt, Config: config}
+	pb, err := proto.Marshal(&ec)
 	if err != nil {
 		return err
 	}
 	_, err = os.Stat(fp)
 	if !os.IsNotExist(err) {
-		return errors.New(fmt.Sprintf("Enc config file already exists: %s", fp))
+		return fmt.Errorf("Enc config file already exists: %s", fp)
 	}
 	out, err := os.Create(fp)
 	if err != nil {
 		return err
 	}
-	enc := gob.NewEncoder(out)
-	err = enc.Encode(ec)
-	if err != nil {
-		out.Close()
-		return err
-	}
+	out.Write([]byte(VC_MAGIC))
+	out.Write(pb)
 	return out.Close()
 }
 
-func makeEncConfig(pwFile string, rounds int, cfg *Config) (*EncConfig, error) {
-	if cfg.EncryptionKey != nil {
-		return nil, errors.New("Encryption key is not empty in Config")
-	}
+func WriteNewConfig(pwFile, repo string, rounds int, cfg *Config) error {
 	if pwFile == "" {
-		configBytes, err := configToBytes(cfg)
+		configBytes, err := configToBytes(cfg, false)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		return &EncConfig{Magic: ENC_CONFIG_MAGIC, Version: VBK_VERSION, EncryptionType: NO_ENCRYPTION, Config: configBytes}, nil
+		return writeEncConfig(path.Join(repo, CONFIG_FILE), EncType_NO_ENCRYPTION, 0, nil, configBytes)
 	}
 	pw, err := ioutil.ReadFile(pwFile)
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Cannot read password file: %s", pwFile))
+		return fmt.Errorf("Cannot read password file: %s", pwFile)
 	}
-	salt, masterKey, storageKey, err := GenKey(pw, rounds)
-	if err != nil {
-		return nil, err
-	}
-	cfg.EncryptionKey = storageKey
-	configBytes, err := configToBytes(cfg)
-	if err != nil {
-		return nil, err
-	}
-	encCfg, err := encryptBytes(masterKey, configBytes)
-	if err != nil {
-		return nil, err
-	}
-	return &EncConfig{Magic: ENC_CONFIG_MAGIC, Version: VBK_VERSION, EncryptionType: SYMMETRIC_ENCRYPTION, PBKDF2Iterations: rounds, Salt: salt, Config: encCfg}, nil
-}
-
-func WriteNewConfig(pwFile, bkDir string, rounds int, cfg *Config) error {
-	encCfg, err := makeEncConfig(pwFile, rounds, cfg)
+	salt, masterKey, storageKey, fpSecret, err := genKey(pw, rounds)
 	if err != nil {
 		return err
 	}
-	return writeEncConfig(path.Join(bkDir, CONFIG_FILE), encCfg)
+	cfg.EncryptionKey = storageKey
+	cfg.FPSecret = fpSecret
+	configBytes, err := configToBytes(cfg, true)
+	if err != nil {
+		return err
+	}
+	enc, err := encryptBytes(masterKey, configBytes)
+	if err != nil {
+		return err
+	}
+	return writeEncConfig(path.Join(repo, CONFIG_FILE), EncType_SYMMETRIC, int64(rounds), salt, enc)
 }
 
-func GetConfig(pwFile, bkDir string) (*Config, error) {
-	ec, err := readEncConfig(path.Join(bkDir, CONFIG_FILE))
+func GetConfig(pwFile, repo string) (*Config, error) {
+	ec, err := readEncConfig(path.Join(repo, CONFIG_FILE))
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Cannot read enc config file: %s", err))
+		return nil, fmt.Errorf("Invalid repository: %s", err)
 	}
-	if ec.EncryptionType == NO_ENCRYPTION {
+	if ec.Type == EncType_NO_ENCRYPTION {
 		if pwFile != "" {
 			return nil, errors.New("Backup is not encrypted")
 		}
-		cfg, err := configFromBytes(ec.Config)
-		if err != nil {
-			return nil, err
-		}
-		if cfg.EncryptionKey != nil {
-			return nil, errors.New("Encryption key is not empty")
-		}
-		return cfg, nil
+		return configFromBytes(ec.Config, false)
+	} else if ec.Type != EncType_SYMMETRIC {
+		return nil, errors.New("Unknown encryption type.")
 	}
 	if pwFile == "" {
 		return nil, errors.New("Backup is encrypted")
 	}
 	pw, err := ioutil.ReadFile(pwFile)
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Cannot read pw file: %s", err))
+		return nil, fmt.Errorf("Cannot read pw file: %s", err)
 	}
-	masterKey := GetMasterKey(pw, ec.Salt, ec.PBKDF2Iterations)
+	masterKey := getMasterKey(pw, ec.Salt, int(ec.Iterations))
 	configBytes, err := decryptBytes(masterKey, ec.Config)
-	cfg, err := configFromBytes(configBytes)
 	if err != nil {
 		return nil, errors.New("Wrong password")
 	}
-	return cfg, nil
+	return configFromBytes(configBytes, true)
 }

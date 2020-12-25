@@ -14,13 +14,12 @@ func TestEncryption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Log("Testing nil buffer")
+	testEncrypt(t, key, nil)
+	// first half random, second half zeros
 	const LOG_MAX_SIZE = 25
 	const MAX_SIZE = 1 << LOG_MAX_SIZE
 	data := make([]byte, MAX_SIZE)
-	t.Log("Testing zero buffer len", len(data))
-	testEncrypt(t, key, data)
-	testEncGzip(t, key, data)
-	// first half random, second half zeros
 	_, err = io.ReadFull(rand.Reader, data[:MAX_SIZE/2])
 	if err != nil {
 		t.Fatal(err)
@@ -31,20 +30,16 @@ func TestEncryption(t *testing.T) {
 	plaintext := data[:0]
 	t.Log("Testing plaintext len", len(plaintext))
 	testEncrypt(t, key, plaintext)
-	testEncGzip(t, key, plaintext)
-	testGzip(t, plaintext)
 	for i := uint(0); i <= LOG_MAX_SIZE; i++ {
 		start := MAX_SIZE/2 - (1 << (i - 1))
 		plaintext = data[start : start+(1<<i)]
 		t.Log("Testing plaintext len", len(plaintext))
 		testEncrypt(t, key, plaintext)
-		testEncGzip(t, key, plaintext)
-		testGzip(t, plaintext)
 	}
 }
 
 func testEncrypt(t *testing.T, key, plaintext []byte) {
-	k := sha512.Sum512_256(key)
+	var k EncKey = sha512.Sum512_256(key)
 	ciphertext, err := encryptBytes(&k, plaintext)
 	if err != nil {
 		t.Fatal(err)
@@ -54,64 +49,21 @@ func testEncrypt(t *testing.T, key, plaintext []byte) {
 		t.Fatal(err)
 	}
 	if bytes.Compare(ciphertext, ciphertext2) == 0 {
-		t.Fatal("Same ciphertext")
+		t.Fatal("Ciphertext should not be the same")
 	}
 	result, err := decryptBytes(&k, ciphertext)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Compare(result, plaintext) != 0 {
-		t.Fatal("result does not match plaintext\n")
+		t.Fatal("Decrypted results does not match plaintext\n")
 	}
 	result2, err := decryptBytes(&k, ciphertext2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Compare(result2, plaintext) != 0 {
-		t.Fatal("result does not match plaintext\n")
+		t.Fatal("Decrypted results does not match plaintext\n")
 	}
-	t.Logf("testEncryptSB succeeded with plaintext len: %d, cipherlen: %d, overhead: %d", len(plaintext), len(ciphertext), len(ciphertext)-len(plaintext))
-}
-
-func testEncGzip(t *testing.T, key, plaintext []byte) {
-	k := sha512.Sum512_256(key)
-	ciphertext, err := encGzipBytes(&k, plaintext)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ciphertext2, err := encGzipBytes(&k, plaintext)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Compare(ciphertext, ciphertext2) == 0 {
-		t.Fatal("Same ciphertext")
-	}
-
-	result, err := decGunzipBytes(&k, ciphertext)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Compare(result, plaintext) != 0 {
-		t.Fatal("result does not match plaintext\n")
-	}
-	result2, err := decGunzipBytes(&k, ciphertext2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Compare(result2, plaintext) != 0 {
-		t.Fatal("result does not match plaintext\n")
-	}
-	t.Logf("testEncGzipSB succeeded with plaintext len: %d, cipherlen: %d, overhead: %d", len(plaintext), len(ciphertext), len(ciphertext)-len(plaintext))
-}
-
-func testGzip(t *testing.T, plaintext []byte) {
-	gzipText := gzipBytes(plaintext)
-	result, err := gunzipBytes(gzipText)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Compare(result, plaintext) != 0 {
-		t.Fatal("result does not match plaintext\n")
-	}
-	t.Logf("testGzipSB succeeded with plaintext len: %d, gziplen: %d, overhead: %d", len(plaintext), len(gzipText), len(gzipText)-len(plaintext))
+	t.Logf("testEncryptSB succeeded with plaintext len: %d, ciphertext len: %d, overhead: %d", len(plaintext), len(ciphertext), len(ciphertext)-len(plaintext))
 }

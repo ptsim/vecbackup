@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"crypto/sha512"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -13,35 +12,48 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"runtime/pprof"
 	"sort"
 	"strings"
 	"time"
 )
 
 const (
-	DEFAULT_CHUNK_SIZE        = 16 * 1024 * 1024
-	DEFAULT_PBKDF2_ITERATIONS = 100000
-	CHUNK_DIR_DEPTH           = 3
-	VERSION_FILENAME_PREFIX   = "vecbackup-version-"
-	IGNORE_FILENAME           = "vecbackup-ignore"
-	LOCK_FILENAME             = "vecbackup-lock"
-	TEMP_FILE_SUFFIX          = "-temp"
-	CHUNK_DIR                 = "chunks"
-	VERSIONS_DIR              = "versions"
-	DEFAULT_DIR_PERM          = 0777
-	DEFAULT_FILE_PERM         = 0666
-	PATH_SEP                  = string(os.PathSeparator)
+	VC_VERSION              = 1
+	VC_MAGIC                = "VBKC"
+	VV_VERSION              = 1
+	VV_MAGIC                = "VBKV"
+	CONFIG_FILE             = "config"
+	VERSIONS_DIR            = "versions"
+	VERSION_FILENAME_PREFIX = "version-"
+	LOCK_FILENAME           = "lock"
+	TEMP_FILE_SUFFIX        = "-temp"
+	CHUNK_DIR               = "chunks"
+	DEFAULT_DIR_PERM        = 0700
+	DEFAULT_FILE_PERM       = 0600
+	PATH_SEP                = string(os.PathSeparator)
 )
 
-//---------------------------------------------------------------------------
+var stdout io.Writer = os.Stdout
+var stderr io.Writer = os.Stderr
+var debug = false
 
-func readIgnoreFile(src string) ([]string, error) {
-	ignorePatterns := []string{}
-	in, err := os.Open(path.Join(src, IGNORE_FILENAME))
-	if os.IsNotExist(err) {
-		return ignorePatterns, nil
-	} else if err != nil {
+func SetDebug(dbg bool) {
+	debug = dbg
+}
+
+func debugP(fmt string, v ...interface{}) {
+	if debug {
+		log.Printf(fmt, v...)
+	}
+}
+
+func readExcludeFile(fn string) ([]string, error) {
+	if fn == "" {
+		return nil, nil
+	}
+	excludePatterns := []string{}
+	in, err := os.Open(fn)
+	if err != nil {
 		return nil, err
 	}
 	defer in.Close()
@@ -51,24 +63,23 @@ func readIgnoreFile(src string) ([]string, error) {
 		if len(l) > 0 {
 			_, err := filepath.Match(l, "zzz")
 			if err != nil {
-				return nil, errors.New(fmt.Sprintf("Bad pattern in ignore file: %v", l))
+				return nil, fmt.Errorf("Bad exclude pattern: %s", l)
 			} else {
-				ignorePatterns = append(ignorePatterns, l)
+				excludePatterns = append(excludePatterns, l)
 			}
 		}
 	}
-	return ignorePatterns, nil
+	return excludePatterns, nil
 }
 
-func toIgnore(ignorePatterns []string, dir, fn string) bool {
-	for _, p := range ignorePatterns {
+func toExclude(excludePatterns []string, dir, fn string) bool {
+	for _, p := range excludePatterns {
 		var matched bool
 		var err error
-		if p[0] == '/' {
-			rp := filepath.ToSlash(PATH_SEP + path.Join(dir, fn))
-			matched, err = filepath.Match(p, rp)
+		if p[0] == os.PathSeparator {
+			matched, err = filepath.Match(p, filepath.ToSlash(PATH_SEP+path.Join(dir, fn)))
 		} else {
-			matched, err = filepath.Match(p, fn)
+			matched, err = filepath.Match(p, filepath.ToSlash(fn))
 		}
 		if err == nil && matched {
 			return true
@@ -77,25 +88,7 @@ func toIgnore(ignorePatterns []string, dir, fn string) bool {
 	return false
 }
 
-func cleanSubpath(sub string) (string, error) {
-	if sub == "" {
-		return "", nil
-	}
-	l := strings.Split(sub, PATH_SEP)
-	nl := []string{}
-	for _, p := range l {
-		if p == "." || p == "" {
-			continue
-		}
-		if p == ".." {
-			return "", errors.New(fmt.Sprintf("Invalid subpath: %s", sub))
-		}
-		nl = append(nl, p)
-	}
-	return path.Join(nl...), nil
-}
-
-func IsSymlink(f os.FileInfo) bool {
+func isSymlink(f os.FileInfo) bool {
 	return f.Mode()&os.ModeSymlink != 0
 }
 
@@ -119,519 +112,380 @@ func pathCompare(p1, p2 string) int {
 	}
 }
 
-type ByDirFile []string
+type byDirFile []string
 
-func (s ByDirFile) Len() int {
+func (s byDirFile) Len() int {
 	return len(s)
 }
-func (s ByDirFile) Swap(i, j int) {
+func (s byDirFile) Swap(i, j int) {
 	s[i], s[j] = s[j], s[i]
 }
-func (s ByDirFile) Less(i, j int) bool {
+func (s byDirFile) Less(i, j int) bool {
 	return pathCompare(s[i], s[j]) < 0
 }
 
-func nodeExists(fp string) bool {
-	_, err := os.Stat(fp)
+func nodeExists(p string) bool {
+	_, err := os.Lstat(p)
 	return !os.IsNotExist(err)
 }
 
-//---------------------------------------------------------------------------
-
-type DirReader struct {
-	src    string
-	ignore []string
-	lfp    []string
-	lfi    []os.FileInfo
+type fileDataMap struct {
+	names []string
+	files map[string]*FileData
 }
 
-func (dr *DirReader) Push(fp string, f os.FileInfo) {
-	dr.lfp = append(dr.lfp, fp)
-	dr.lfi = append(dr.lfi, f)
+func (fdm *fileDataMap) Init() {
+	fdm.files = make(map[string]*FileData)
+	fdm.names = nil
 }
 
-func (dr *DirReader) Pop() (fp string, f os.FileInfo) {
-	n := len(dr.lfp) - 1
-	fp = dr.lfp[n]
-	f = dr.lfi[n]
-	dr.lfp = dr.lfp[:n]
-	dr.lfi = dr.lfi[:n]
-	return
-}
-
-func (dr *DirReader) PushChildren(fp string) error {
-	files, err := ioutil.ReadDir(path.Join(dr.src, fp))
-	if err != nil {
-		return err
+func (fdm *fileDataMap) AddItem(fd *FileData) bool {
+	n := fd.Name
+	if fdm.files[n] == nil {
+		fdm.files[n] = fd
+		fdm.names = append(fdm.names, n)
+		return true
 	}
-	for i := len(files) - 1; i >= 0; i-- {
-		name := files[i].Name()
-		if toIgnore(dr.ignore, fp, name) {
-			continue
-		}
-		dr.Push(path.Join(fp, name), files[i])
-	}
-	return nil
+	return false
 }
 
-func (dr *DirReader) Next() (*FileData, error) {
-	for len(dr.lfp) > 0 {
-		fp, f := dr.Pop()
-		if f.IsDir() {
-			err := dr.PushChildren(fp)
-			if err != nil {
-				return nil, err
-			}
-			return NewDirectory(fp, f.Mode().Perm()), nil
-		} else if f.Mode().IsRegular() {
-			return NewRegularFile(fp, f.Size(), f.ModTime(), f.Mode().Perm(), nil), nil
-		} else if IsSymlink(f) {
-			if target, err := os.Readlink(path.Join(dr.src, fp)); err != nil {
-				return nil, err
-			} else {
-				return NewSymlink(fp, target), nil
-			}
-		}
-	}
-	return nil, io.EOF
-}
-
-func (dr *DirReader) Close() error {
-	dr.ignore = nil
-	dr.lfp = nil
-	dr.lfi = nil
-	return nil
-}
-
-func getSpecifiedFiles(ignore []string, src string, subpaths []string) (FReader, error) {
-	if len(subpaths) == 0 {
-		subpaths = []string{"."}
-	}
-	sort.Sort(ByDirFile(subpaths))
-	dr := &DirReader{src: src, ignore: ignore}
-	for i := len(subpaths) - 1; i >= 0; i-- {
-		p := subpaths[i]
-		p, err := cleanSubpath(p)
-		if err != nil {
-			return nil, err
-		}
-		if p != "" {
-			if f, err := os.Stat(path.Join(src, p)); err != nil {
-				return dr, err
-			} else {
-				dr.Push(p, f)
-			}
+func scanOneDir(src string, f os.FileInfo, excludes []string, fdm *fileDataMap) int {
+	if f == nil {
+		if fi, err := os.Lstat(src); err != nil {
+			fmt.Fprintf(stderr, "F %s: %s\n", src, err)
+			return 1
 		} else {
-			err = dr.PushChildren(p)
-			if err != nil {
-				return nil, err
-			}
+			f = fi
 		}
 	}
-	return dr, nil
+	if f.IsDir() {
+		if fdm.AddItem(NewDirectory(src, f.Mode().Perm())) {
+			if files, err := ioutil.ReadDir(src); err != nil {
+				fmt.Fprintf(stderr, "F %s: %s\n", src, err)
+				return 1
+			} else {
+				errs := 0
+				for _, child := range files {
+					if toExclude(excludes, src, child.Name()) {
+						continue
+					}
+					errs2 := scanOneDir(path.Join(src, child.Name()), child, excludes, fdm)
+					errs = errs + errs2
+				}
+				return errs
+			}
+		}
+	} else if f.Mode().IsRegular() {
+		fdm.AddItem(NewRegularFile(src, f.Size(), f.ModTime(), f.Mode().Perm(), nil, nil, nil))
+	} else if isSymlink(f) {
+		if target, err := os.Readlink(src); err != nil {
+			fmt.Fprintf(stderr, "F %s: %s\n", src, err)
+			return 1
+		} else {
+			fdm.AddItem(NewSymlink(src, target))
+		}
+	}
+	return 0
 }
 
-type NullFReader struct {
+func scanSrcs(excludes []string, srcs []string) (*fileDataMap, int) {
+	errs := 0
+	fdm := &fileDataMap{}
+	fdm.Init()
+	for _, src := range srcs {
+		src = filepath.Clean(src)
+		err2 := scanOneDir(src, nil, excludes, fdm)
+		errs = errs + err2
+	}
+	return fdm, errs
 }
 
-func (nr *NullFReader) Next() (*FileData, error) {
-	return nil, io.EOF
-}
-
-func (nr *NullFReader) Close() error {
-	debugP("NullFReader.Close\n")
-	return nil
-}
-
-type NullFWriter struct {
-}
-
-func (nw *NullFWriter) Write(*FileData) error {
-	return nil
-}
-
-func (nw *NullFWriter) Close() error {
-	return nil
-}
-
-func (nw *NullFWriter) Abort() {
-}
-
-type Buf struct {
+type sharedBuf struct {
 	bf []byte
-	sz int
 }
 
-func (b *Buf) SetSize(size int) []byte {
+func (b *sharedBuf) Realloc(size int) {
 	if cap(b.bf) < size {
 		b.bf = make([]byte, size)
 	}
-	b.sz = size
-	return b.bf[:size]
+	b.bf = b.bf[:size]
 }
 
-func (b *Buf) B() []byte {
-	return b.bf[:b.sz]
+func (b *sharedBuf) B() []byte {
+	return b.bf
 }
 
-//---------------------------------------------------------------------------
-
-type mergeFunc func(f1 *FileData, f2 *FileData) bool
-
-func isError(err error) bool {
-	return err != nil && err != io.EOF
+func makeChunkFP(secret []byte, origFp FP) FP {
+	if secret == nil {
+		return origFp
+	}
+	s := append(append([]byte(nil), secret...), origFp[:]...)
+	return sha512.Sum512_256(s)
 }
 
-func mergeFileDataStream(s1, s2 FReader, f mergeFunc) error {
-	f1, err1 := s1.Next()
-	f2, err2 := s2.Next()
-	for {
-		if isError(err1) {
-			return err1
-		}
-		if isError(err2) {
-			return err2
-		}
-		if err1 == io.EOF && err2 == io.EOF {
-			return nil
-		}
-		if err1 == io.EOF {
-			if f(nil, f2) {
-				return nil
-			}
-			f2, err2 = s2.Next()
-		} else if err2 == io.EOF {
-			if f(f1, nil) {
-				return nil
-			}
-			f1, err1 = s1.Next()
-		} else if f1.Name == f2.Name {
-			if f(f1, f2) {
-				return nil
-			}
-			f1, err1 = s1.Next()
-			f2, err2 = s2.Next()
-		} else if pathCompare(f1.Name, f2.Name) < 0 {
-			if f(f1, nil) {
-				return nil
-			}
-			f1, err1 = s1.Next()
-		} else {
-			if f(nil, f2) {
-				return nil
-			}
-			f2, err2 = s2.Next()
+func matchChunkFP(secret []byte, fp FP, b []byte) bool {
+	fp2 := makeChunkFP(secret, sha512.Sum512_256(b))
+	return fp == fp2
+}
+
+func statsRemoveFile(fd *FileData, stats *BackupStats) {
+	if fd != nil {
+		if fd.IsFile() {
+			stats.FilesRemoved++
+		} else if fd.IsDir() {
+			stats.DirsRemoved++
+		} else if fd.IsSymlink() {
+			stats.SymlinksRemoved++
 		}
 	}
 }
 
-func backupOneFile(cm ChunkMgr, src string, cs int, dryRun, checksum, verbose bool, buf *Buf, fw FWriter, out io.Writer, old *FileData, new *FileData) error {
-	if old == nil && new != nil {
-		if err := addChunks(new, cm, src, cs, dryRun, buf); err != nil {
-			return err
+func backupOneNode(cm *CMgr, cs int32, dryRun, force, verbose bool, buf *sharedBuf, out io.Writer, old *FileData, new *FileData, secret []byte, stats *BackupStats) (*FileData, error) {
+	if old != nil && new == nil {
+		statsRemoveFile(old, stats)
+		if verbose {
+			fmt.Fprintf(out, "- %s\n", old.PrettyPrint())
 		}
-		if err := fw.Write(new); err != nil {
-			return err
+		return nil, nil
+	}
+	to_add := old
+	if force || old == nil && new != nil || new.Type != old.Type || (new.IsFile() && (new.Size != old.Size || !new.ModTime.Equal(old.ModTime))) || (new.IsSymlink() && new.Target != old.Target) {
+		to_add = new
+	} else if old.IsFile() {
+		for _, chunk := range old.Chunks {
+			if !cm.FindChunk(chunk) {
+				fmt.Fprintf(stderr, "Missing chunk %s\n", chunk)
+				to_add = new
+				break
+			}
 		}
-		fmt.Fprintf(out, "+ %s\n", new.PrettyPrint())
-	} else if old != nil && new == nil {
-		fmt.Fprintf(out, "- %s\n", old.PrettyPrint())
-	} else if new.Type != old.Type || (new.IsFile() && (new.Size != old.Size || new.ModTime != old.ModTime || (checksum && !fileMatchesChecksums(old, cm, src)))) || (new.IsSymlink() && new.Target != old.Target) {
-		if err := addChunks(new, cm, src, cs, dryRun, buf); err != nil {
-			return err
+	}
+	var addSrcSize int64 = 0
+	var addRepoSize int64 = 0
+	if to_add == new {
+		if new.IsFile() {
+			if !dryRun {
+				if added, added2, err := addChunks(new, cm, cs, dryRun, buf, secret); err != nil {
+					fmt.Fprintf(stderr, "F %s: %s\n", to_add.PrettyPrint(), err)
+					stats.Errors++
+					return nil, err
+				} else {
+					addSrcSize = added
+					addRepoSize = added2
+				}
+			}
+			if old == nil || !old.IsFile() {
+				stats.FilesNew++
+				statsRemoveFile(old, stats)
+			} else {
+				stats.FilesUpdated++
+			}
+		} else if new.IsDir() {
+			if old == nil || !old.IsDir() {
+				stats.DirsNew++
+				statsRemoveFile(old, stats)
+			} else {
+				stats.DirsUpdated++
+			}
+		} else if new.IsSymlink() {
+			if old == nil || !old.IsSymlink() {
+				stats.SymlinksNew++
+				statsRemoveFile(old, stats)
+			} else {
+				stats.SymlinksUpdated++
+			}
 		}
-		if err := fw.Write(new); err != nil {
-			return err
+		if verbose {
+			fmt.Fprintf(out, "+ %v\n", to_add.PrettyPrint())
 		}
-		fmt.Fprintf(out, "+ %s\n", new.PrettyPrint())
 	} else {
-		if new.IsFile() && (new.Perm&0400) == 0 {
-			return errors.New(fmt.Sprintf("%s: read permission required", new.PrettyPrint()))
-		} else if new.IsDir() && (new.Perm&0500) == 0 {
-			return errors.New(fmt.Sprintf("%s: read and execute permission required", new.PrettyPrint()))
-		}
 		if !old.IsSymlink() {
 			old.Perm = new.Perm
 		}
-		if err := fw.Write(old); err != nil {
-			return err
-		}
-		if verbose {
-			fmt.Fprintf(out, "= %v\n", new.PrettyPrint())
-		}
 	}
-	return nil
+	if to_add.IsFile() {
+		stats.Files++
+		stats.Size += new.Size
+		stats.AddSrcSize += addSrcSize
+		stats.AddRepoSize += addRepoSize
+	} else if to_add.IsDir() {
+		stats.Dirs++
+	} else {
+		stats.Symlinks++
+	}
+	return to_add, nil
 }
 
-func fileMatchesChecksums(fd *FileData, cm ChunkMgr, src string) bool {
-	p := path.Join(src, fd.Name)
-	file, err := os.Open(p)
-	if err != nil {
-		return false
-	}
-	defer file.Close()
-	var theBuf Buf
-	for _, s := range fd.Chunks {
-		cs, bs, ok := DecodeChunkName(s)
-		if !ok {
-			return false
-		}
-		if !cm.FindChunk(s) {
-			return false
-		}
-		b := theBuf.SetSize(bs)
-		count, err := io.ReadFull(file, b)
-		if count != bs || err != nil {
-			return false
-		}
-		cs2 := sha512.Sum512_256(b)
-		if bytes.Compare(cs, cs2[:]) != 0 {
-			return false
-		}
-	}
-	return true
-}
-
-func addChunks(fd *FileData, cm ChunkMgr, src string, bs int, dryRun bool, buf *Buf) error {
-	if fd.IsDir() || fd.IsSymlink() || dryRun {
-		return nil
-	}
+func addChunks(fd *FileData, cm *CMgr, bs int32, dryRun bool, buf *sharedBuf, secret []byte) (int64, int64, error) {
 	h := sha512.New512_256()
-	var css []string = nil
-	var err error
-	err2 := readFileChunks(path.Join(src, fd.Name), buf, bs, func(buf2 *Buf) bool {
-		b := buf2.B()
-		h.Write(b)
-		cs := sha512.Sum512_256(b)
-		n := MakeChunkName(cs[:], len(b))
-		css = append(css, n)
-		err = cm.AddChunk(n, b)
-		return err != nil
-	})
-	if err == nil {
-		err = err2
-	}
-	if err == nil {
-		fd.Chunks = css
-		fd.FileChecksum = h.Sum(nil)
-	}
-	return err
-}
-
-func readFileChunks(p string, buf *Buf, bs int, f func(buf *Buf) bool) error {
-	file, err := os.Open(p)
+	var chunks []FP = nil
+	var sizes []int32
+	file, err := os.Open(fd.Name)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 	defer file.Close()
-	fi, err := file.Stat()
-	if err != nil {
-		return err
-	}
-	buffer := buf.SetSize(bs)
-	var len int64 = 0
+	buf.Realloc(int(bs))
+	var n int64 = 0
+	var added int64 = 0
+	var addedActual int64 = 0
 	for {
-		count, err := io.ReadFull(file, buffer)
+		count, err := io.ReadFull(file, buf.B())
 		if count > 0 {
-			len += int64(count)
-			buf.SetSize(count)
-			if f(buf) {
-				return nil
+			b := buf.B()[:count]
+			n += int64(count)
+			h.Write(b)
+			var chunk FP = makeChunkFP(secret, sha512.Sum512_256(b))
+			dup, compressedLen, err := cm.AddChunk(chunk, b)
+			if err != nil {
+				return 0, 0, err
 			}
-		}
-		if len > fi.Size() {
-			return errors.New(fmt.Sprintf("File size changed %s", p))
-		}
-		if err == io.EOF || count < bs {
-			if len < fi.Size() {
-				return errors.New(fmt.Sprintf("File size changed %s", p))
+			if !dup {
+				added = added + int64(count)
+				addedActual = addedActual + int64(compressedLen)
 			}
-			return nil
+			chunks = append(chunks, chunk)
+			sizes = append(sizes, int32(count))
+		}
+		if n > fd.Size {
+			return 0, 0, fmt.Errorf("File size changed %s", fd.Name)
+		}
+		if err == io.EOF || count < int(bs) {
+			if n < fd.Size {
+				return 0, 0, fmt.Errorf("File size changed %s", fd.Name)
+			}
+			break
 		}
 	}
+	fd.Chunks = chunks
+	fd.Sizes = sizes
+	fd.FileChecksum = h.Sum(nil)
+	return added, addedActual, nil
 }
 
-//---------------------------------------------------------------------------
-
-func matchRecoveryPatterns(fp string, patterns []string) bool {
+func matchRestorePatterns(fp string, patterns []string) bool {
 	if len(patterns) == 0 {
 		return true
 	}
 	for _, pat := range patterns {
-		if matchRecoveryPattern(fp, pat) {
+		if matchRestorePattern(fp, pat) {
 			return true
 		}
 	}
 	return false
 }
 
-func matchRecoveryPattern(fp, pat string) bool {
-	if fp == pat {
+func matchRestorePattern(p, pat string) bool {
+	if p == pat {
 		return true
 	}
 	l := len(pat)
-	return l == 0 || (len(fp) > l && fp[:l] == pat && os.IsPathSeparator(fp[l]))
+	return l == 0 || (len(p) > l && p[:l] == pat && os.IsPathSeparator(p[l]))
 }
 
-func readBackupFileChunks(fd *FileData, cm ChunkMgr, buf *Buf, f func(string, CS) bool) error {
-	for _, name := range fd.Chunks {
-		cs, size, ok := DecodeChunkName(name)
-		if !ok {
-			return errors.New(fmt.Sprintf("Invalid chunk name: %s\n", name))
-		}
-		buf.SetSize(size)
-		err := cm.ReadChunk(name, buf.B())
-		if err != nil {
-			return errors.New(fmt.Sprintf("Failed to read chunk %s: %s", name, err))
-		}
-		if f(name, cs) {
-			return nil
-		}
-	}
-	return nil
-}
-
-func recoverFileToTemp(fd *FileData, cm ChunkMgr, recDir string, testRun bool, buf *Buf) (string, error) {
+func restoreFileToTemp(fd *FileData, cm *CMgr, fn string, testRun bool, secret []byte) error {
 	var f *os.File
-	fn := path.Join(recDir, fd.Name) + TEMP_FILE_SUFFIX
 	if !testRun {
 		d := filepath.Dir(fn)
 		err := os.MkdirAll(d, DEFAULT_DIR_PERM)
 		f, err = os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, DEFAULT_FILE_PERM)
 		if err != nil {
-			return "", err
+			return err
 		}
 		defer f.Close()
 	}
 	var l int64
 	h := sha512.New512_256()
-	var err error
-	if err2 := readBackupFileChunks(fd, cm, buf, func(name string, cs CS) bool {
-		b := buf.B()
-		h.Write(b)
-		cs2 := sha512.Sum512_256(b)
-		if bytes.Compare(cs, cs2[:]) != 0 {
-			err = errors.New(fmt.Sprintf("Checksum mismatch for chunk %s", name))
-		} else {
-			l += int64(len(b))
-			if !testRun {
-				_, err = f.Write(b)
+	for _, chunk := range fd.Chunks {
+		b, err := cm.ReadChunk(chunk)
+		if err == nil && !matchChunkFP(secret, chunk, b) {
+			err = fmt.Errorf("Bad chunk, mismatch fingerpint %s", chunk)
+		}
+		if err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("Missing chunk %s", chunk)
+			} else {
+				return fmt.Errorf("Bad chunk %s", chunk)
 			}
 		}
-		return err != nil
-	}); err2 != nil && err == nil {
-		err = err2
-	}
-	if err != nil {
-		return fn, err
-	}
-	if l != fd.Size {
-		return fn, errors.New(fmt.Sprintf("Length mismatch: %d vs %d", l, fd.Size))
-	}
-	if bytes.Compare(fd.FileChecksum, h.Sum(nil)) != 0 {
-		return fn, errors.New("File checksum mismatch")
-	}
-	return fn, nil
-}
-
-func recoverNode(fd *FileData, cm ChunkMgr, recDir string, testRun bool, merge bool, buf *Buf) error {
-	fp := path.Join(recDir, fd.Name)
-	if fd.IsDir() {
+		h.Write(b)
+		l += int64(len(b))
 		if !testRun {
-			if err := os.MkdirAll(fp, DEFAULT_DIR_PERM); err != nil && !os.IsExist(err) {
+			_, err = f.Write(b)
+			if err != nil {
 				return err
 			}
-			return os.Chmod(fp, fd.Perm)
+		}
+	}
+	if l != fd.Size {
+		return fmt.Errorf("Length mismatch: %d vs %d", l, fd.Size)
+	}
+	if bytes.Compare(fd.FileChecksum, h.Sum(nil)) != 0 {
+		return errors.New("File checksum mismatch")
+	}
+	return nil
+}
+
+func restoreNode(fd *FileData, cm *CMgr, recDir string, testRun bool, merge bool, secret []byte) error {
+	p := path.Join(recDir, fd.Name)
+	if fd.IsDir() {
+		if !testRun {
+			if err := os.MkdirAll(p, DEFAULT_DIR_PERM); err != nil && !os.IsExist(err) {
+				return err
+			}
+			return os.Chmod(p, fd.Perm|0700)
 		}
 		return nil
 	}
 	if fd.IsSymlink() {
 		if !testRun {
-			return os.Symlink(fd.Target, fp)
+			return os.Symlink(fd.Target, p)
 		}
 		return nil
 	}
 	if merge {
-		if fi, err := os.Stat(fp); err == nil && fi.Size() == fd.Size && fi.ModTime() == fd.ModTime {
+		if fi, err := os.Lstat(p); err == nil && fi.Size() == fd.Size && fi.ModTime().Equal(fd.ModTime) {
 			return nil
 		}
 	}
-	tfp, err := recoverFileToTemp(fd, cm, recDir, testRun, buf)
+	tp := p + TEMP_FILE_SUFFIX
+	err := restoreFileToTemp(fd, cm, tp, testRun, secret)
 	if err == nil {
 		if testRun {
 			return nil
 		}
-		err = os.Chtimes(tfp, fd.ModTime, fd.ModTime)
+		err = os.Chtimes(tp, fd.ModTime, fd.ModTime)
 		if err == nil {
-			err = os.Chmod(tfp, fd.Perm)
+			err = os.Chmod(tp, fd.Perm)
 			if err == nil {
-				err = os.Rename(tfp, fp)
+				err = os.Rename(tp, p)
 				if err == nil {
 					return nil
 				}
 			}
 		}
 	}
-	if tfp != "" {
-		os.Remove(tfp)
+	if tp != "" {
+		os.Remove(tp)
 	}
 	return err
 }
 
-//---------------------------------------------------------------------------
-
-func verifyChunks(cm ChunkMgr, buf *Buf, counts map[string]int) (numChunks, numOk, numFailed, numUnused int) {
-	numChunks = len(counts)
-	numOk = 0
-	numFailed = 0
-	numUnused = 0
-	for name, count := range counts {
-		cs, size, ok := DecodeChunkName(name)
-		if !ok {
-			debugP("FAILED: %s: Invalid Chunk name\n", name)
-			numFailed++
-			continue
-		}
-		if count == 0 {
-			numUnused++
-			continue
-		}
-		buf.SetSize(size)
-		err := cm.ReadChunk(name, buf.B())
-		if err != nil {
-			debugP("FAILED: %s: %s\n", name, err)
-			numFailed++
-			continue
-		}
-		cs2 := sha512.Sum512_256(buf.B())
-		if bytes.Compare(cs, cs2[:]) != 0 {
-			debugP("FAILED: %s: Checksum mismatch\n", name)
-			numFailed++
-			continue
-		}
-		numOk++
-	}
-	return
-}
-
-//---------------------------------------------------------------------------
-
-func setup(bkDir string, pwFile string) (string, VersionMgr, ChunkMgr, *Config, error) {
-	bkDir = filepath.Clean(bkDir)
-	cfg, err := GetConfig(pwFile, bkDir)
+func setup(repo string, pwFile string) (*VMgr, *CMgr, *Config, error) {
+	cfg, err := GetConfig(pwFile, repo)
 	if err != nil {
-		return bkDir, nil, nil, nil, err
+		return nil, nil, nil, err
 	}
-	vm := MakeVersionMgr(bkDir, cfg.EncryptionKey)
-	cm := MakeChunkMgr(bkDir, cfg.EncryptionKey)
-	return bkDir, vm, cm, cfg, nil
+	vm := MakeVMgr(repo, cfg.EncryptionKey)
+	cm := MakeCMgr(repo, cfg.EncryptionKey, cfg.Compress)
+	return vm, cm, cfg, nil
 }
 
-func writeLockfile(bkDir string) (string, error) {
-	lfn := path.Join(bkDir, LOCK_FILENAME)
+func writeLockfile(repo string) (string, error) {
+	lfn := path.Join(repo, LOCK_FILENAME)
 	lockFile, err := os.OpenFile(lfn, os.O_WRONLY|os.O_CREATE|os.O_EXCL, DEFAULT_FILE_PERM)
 	if os.IsExist(err) {
-		return "", errors.New(fmt.Sprintf("Lock file %s already exist.", lfn))
+		return "", fmt.Errorf("Lock file %s already exist.", lfn)
 	} else if err != nil {
 		return "", err
 	}
@@ -645,572 +499,438 @@ func removeLockfile(lfn string) {
 
 //---------------------------------------------------------------------------
 
-func doInit(flags *Flags, bkDir string) error {
-	if flags.pbkdf2Iterations < 100000 {
-		return errors.New(fmt.Sprintf("Too few PBKDF2 iterations, minimum 100,000: %d", flags.pbkdf2Iterations))
+func InitRepo(pwFile, repo string, chunkSize int32, iterations int, compress CompressionMode) error {
+	if repo == "" {
+		return errors.New("Backup repository must be specified.")
 	}
-	bkDir = filepath.Clean(bkDir)
-	if nodeExists(bkDir) {
-		return errors.New(fmt.Sprintf("Backup directory already exist: %s", bkDir))
+	if nodeExists(repo) {
+		return fmt.Errorf("Backup directory already exist: %s", repo)
 	}
-	err := os.MkdirAll(bkDir, DEFAULT_DIR_PERM)
+	err := os.MkdirAll(repo, DEFAULT_DIR_PERM)
 	if err != nil {
-		return errors.New(fmt.Sprintf("Cannot create backup dir: %s", err))
+		return fmt.Errorf("Cannot create backup dir: %s", err)
 	}
-	err = os.MkdirAll(path.Join(bkDir, VERSIONS_DIR), DEFAULT_DIR_PERM)
+	err = os.MkdirAll(path.Join(repo, VERSIONS_DIR), DEFAULT_DIR_PERM)
 	if err != nil {
-		return errors.New(fmt.Sprintf("Cannot create backup dir: %s", err))
+		return fmt.Errorf("Cannot create backup dir: %s", err)
 	}
-	err = os.MkdirAll(path.Join(bkDir, CHUNK_DIR), DEFAULT_DIR_PERM)
+	err = os.MkdirAll(path.Join(repo, CHUNK_DIR), DEFAULT_DIR_PERM)
 	if err != nil {
-		return errors.New(fmt.Sprintf("Cannot create backup dir: %s", err))
+		return fmt.Errorf("Cannot create backup dir: %s", err)
 	}
-	cfg := MakeConfig(flags.chunkSize)
-	err = WriteNewConfig(flags.pwFile, bkDir, flags.pbkdf2Iterations, cfg)
+	cfg := &Config{ChunkSize: chunkSize, Compress: compress}
+	err = WriteNewConfig(pwFile, repo, iterations, cfg)
 	if err != nil {
-		return errors.New(fmt.Sprintf("Cannot write encypted config file: %s", err))
+		return fmt.Errorf("Cannot write encypted config file: %s", err)
 	}
 	return err
 }
 
-func doBackup(flags *Flags, bkDir, src string, subpaths []string) error {
-	bkDir, vm, cm, cfg, err := setup(bkDir, flags.pwFile)
+type BackupStats struct {
+	Version         string
+	Dirs            int
+	DirsNew         int
+	DirsUpdated     int
+	DirsRemoved     int
+	Files           int
+	FilesUpdated    int
+	FilesNew        int
+	FilesRemoved    int
+	Symlinks        int
+	SymlinksNew     int
+	SymlinksUpdated int
+	SymlinksRemoved int
+	Errors          int
+	Size            int64
+	AddSrcSize      int64
+	AddRepoSize     int64
+}
+
+func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose bool, srcs []string, stats *BackupStats) error {
+	if repo == "" {
+		return errors.New("Backup repository must be specified.")
+	}
+	if len(srcs) == 0 {
+		return errors.New("At least one backup src must be specified")
+	}
+	vm, cm, cfg, err := setup(repo, pwFile)
 	if err != nil {
 		return err
 	}
-	lfn, err := writeLockfile(bkDir)
+	excludePatterns, err := readExcludeFile(excludeFrom)
+	if err != nil {
+		return fmt.Errorf("Cannot read exclude-from file: %s", err)
+	}
+	var new_version string
+	if setVersion != "" {
+		if _, ok := DecodeVersionTime(setVersion); ok {
+			new_version = setVersion
+		} else {
+			return fmt.Errorf("Invalid version %s", setVersion)
+		}
+	}
+	last_version, err := vm.GetLatestVersion()
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("Cannot read version files: %s", err)
+	}
+	if new_version == "" {
+		new_version = CreateNewVersion(last_version)
+	}
+	sfdm, errs := scanSrcs(excludePatterns, srcs)
+	stats.Errors += errs
+	if len(sfdm.names) == 0 {
+		return errors.New("Nothing to back up.")
+	}
+	var vfdm = &fileDataMap{}
+	vfdm.Init()
+	if last_version != "" {
+		fds, err, errs := vm.LoadFiles(last_version)
+		if err != nil {
+			return fmt.Errorf("Failed reading previous version: %s", err)
+		}
+		stats.Errors += errs
+		for _, fd := range fds {
+			if !vfdm.AddItem(fd) {
+				fmt.Fprintf(stderr, "Ignoring duplicate item in version file: %s.\n", fd.Name)
+			}
+		}
+	}
+	buf := &sharedBuf{}
+	comb := append(append([]string(nil), vfdm.names...), sfdm.names...)
+	sort.Strings(comb)
+	sort.Sort(byDirFile(comb))
+	lfn, err := writeLockfile(repo)
 	if err != nil {
 		return err
 	}
 	defer removeLockfile(lfn)
-	src = filepath.Clean(src)
-	v, err := vm.GetVersion("latest")
-	if err != nil && !os.IsNotExist(err) {
-		return errors.New(fmt.Sprintf("Cannot read version files: %s", err))
-	}
-	var vfr FReader
-	if v == "" {
-		vfr = &NullFReader{}
-	} else {
-		vfr, err = vm.LoadVersion(v)
-		if err != nil {
-			return errors.New(fmt.Sprintf("Cannot read version file: %s", err))
+	var last string
+	var fds []*FileData
+	for _, n := range comb {
+		if n == last {
+			continue
+		}
+		last = n
+		new_fd, err := backupOneNode(cm, cfg.ChunkSize, dryRun, force, verbose, buf, stdout, vfdm.files[n], sfdm.files[n], cfg.FPSecret, stats)
+		if err == nil && new_fd != nil {
+			fds = append(fds, new_fd)
 		}
 	}
-	ignorePatterns, err := readIgnoreFile(bkDir)
-	if err != nil {
-		return errors.New(fmt.Sprintf("Cannot read ignore file: %s", err))
-	}
-	sfr, err := getSpecifiedFiles(ignorePatterns, src, subpaths)
-	if err != nil {
-		return err
-	}
-	var fw FWriter
-	if !flags.dryRun {
-		var t time.Time
-		if flags.setVersion != "" {
-			t2, err := time.Parse(time.RFC3339Nano, flags.setVersion)
-			if err != nil {
-				return errors.New(fmt.Sprintf("Invalid version %s", flags.version))
-			}
-			t = t2
-		} else {
-			t = time.Now()
-			v2 := MakeVersionString(t)
-			if v == v2 {
-				time.Sleep(10 * time.Nanosecond)
-				t = time.Now()
-			}
-		}
-		fw, err = vm.SaveVersion(t)
-		if err != nil {
+	if !dryRun {
+		if err = vm.SaveFiles(new_version, fds); err != nil {
 			return err
 		}
-	} else {
-		fw = &NullFWriter{}
+		stats.Version = new_version
 	}
-	buf := &Buf{}
-	if err2 := mergeFileDataStream(vfr, sfr, func(saved, scanned *FileData) bool {
-		err = backupOneFile(cm, src, cfg.ChunkSize, flags.dryRun, flags.checksum, flags.verbose, buf, fw, flags.out, saved, scanned)
-		return err != nil
-	}); err2 != nil && err == nil {
-		err = err2
-	}
-	if err2 := vfr.Close(); err2 != nil && err == nil {
-		err = err2
-	}
-	if err2 := sfr.Close(); err2 != nil && err == nil {
-		err = err2
-	}
-	if err != nil {
-		fw.Abort()
-		return err
-	}
-	return fw.Close()
+	return nil
 }
 
-func doRecover(flags *Flags, bkDir, recDir string, patterns []string) error {
-	bkDir, vm, cm, _, err := setup(bkDir, flags.pwFile)
+func Restore(pwFile, repo, recDir, version string, merge, testRun, dryRun, verbose bool, patterns []string) error {
+	if repo == "" {
+		return errors.New("Backup repository must be specified.")
+	}
+	if recDir == "" && !testRun && !dryRun {
+		return errors.New("Target must be specified.")
+	}
+	vm, cm, cfg, err := setup(repo, pwFile)
 	if err != nil {
 		return err
 	}
-	recDir = filepath.Clean(recDir)
-	if nodeExists(recDir) && !flags.merge {
-		return errors.New(fmt.Sprintf("Recovery dir %s already exists", recDir))
+	if nodeExists(recDir) && !merge {
+		return fmt.Errorf("Restore dir %s already exists", recDir)
 	}
-	v, err := vm.GetVersion(flags.version)
+	if version == "" {
+		version, err = vm.GetLatestVersion()
+		if err != nil {
+			return fmt.Errorf("Cannot read version files: %s", err)
+		}
+		if version == "" {
+			return errors.New("Backup is empty")
+		}
+	}
+	fds, err, errs := vm.LoadFiles(version)
 	if err != nil {
-		return errors.New(fmt.Sprintf("Cannot read version files: %s", err))
-	} else if v == "" {
-		return errors.New("Backup is empty")
+		return fmt.Errorf("Cannot read version file: %s", err)
 	}
-	fr, err := vm.LoadVersion(v)
-	if err != nil {
-		return errors.New(fmt.Sprintf("Cannot read version file: %s", err))
-	}
-	if !flags.testRun && !flags.dryRun {
+	if !testRun && !dryRun {
 		os.MkdirAll(recDir, DEFAULT_DIR_PERM)
 	}
-	buf := &Buf{}
-	var fd *FileData
-	ok := true
-	for fd, err = fr.Next(); err == nil; fd, err = fr.Next() {
-		if matchRecoveryPatterns(fd.Name, patterns) {
-			var err2 error
-			if !flags.dryRun {
-				err2 = recoverNode(fd, cm, recDir, flags.testRun, flags.merge, buf)
+	for _, fd := range fds {
+		if matchRestorePatterns(fd.Name, patterns) {
+			if !dryRun {
+				restoreNode(fd, cm, recDir, testRun, merge, cfg.FPSecret)
 			}
-			if err2 == nil {
-				fmt.Fprintf(flags.out, "%s\n", fd.PrettyPrint())
+			if err == nil {
+				if verbose {
+					fmt.Fprintf(stdout, "%s\n", fd.PrettyPrint())
+				}
 			} else {
-				debugP("Cannot recover file %s: %s\n", fd.PrettyPrint(), err)
-				fmt.Fprintf(os.Stderr, "Failed: %s\n", fd.PrettyPrint())
-				ok = false
+				fmt.Fprintf(stderr, "F %s: %s\n", fd.PrettyPrint(), err)
+				errs++
 			}
 		}
 	}
-	if isError(err) {
-		fr.Close()
-		return errors.New(fmt.Sprintf("Error reading version file: %s", err))
+	for i := len(fds) - 1; i >= 0; i-- {
+		fd := fds[i]
+		if matchRestorePatterns(fd.Name, patterns) {
+			if !dryRun && !testRun && fd.IsDir() {
+				err = os.Chmod(path.Join(recDir, fd.Name), fd.Perm)
+				if err != nil {
+					fmt.Fprintf(stderr, "F %s: %s\n", fd.PrettyPrint(), err)
+					errs++
+				}
+			}
+		}
 	}
-	if err = fr.Close(); err != nil {
-		return errors.New(fmt.Sprintf("Error reading version file: %s", err))
-	}
-	if !ok {
-		return errors.New("Failed! Some files were not recovered.")
+	if errs > 0 {
+		return errors.New("Errors occured during restore. Some files were not restored.")
 	}
 	return nil
 }
 
-func doLs(flags *Flags, bkDir string) error {
-	bkDir, vm, _, _, err := setup(bkDir, flags.pwFile)
+func Ls(pwFile, repo, version string) error {
+	if repo == "" {
+		return errors.New("Backup repository must be specified.")
+	}
+	vm, _, _, err := setup(repo, pwFile)
 	if err != nil {
 		return err
 	}
-	v, err := vm.GetVersion(flags.version)
+	if version == "" {
+		version, err = vm.GetLatestVersion()
+	}
 	if err != nil {
-		return errors.New(fmt.Sprintf("Cannot read version files: %s", err))
-	} else if v == "" {
+		return fmt.Errorf("Cannot read version files: %s", err)
+	} else if version == "" {
 		return errors.New("Backup is empty")
 	}
-	fr, err := vm.LoadVersion(v)
+	fds, err, errs := vm.LoadFiles(version)
 	if err != nil {
-		return errors.New(fmt.Sprintf("Cannot read version file: %s", err))
+		return fmt.Errorf("Cannot read version file: %s", err)
 	}
-	var fd *FileData
-	for fd, err = fr.Next(); err == nil; fd, err = fr.Next() {
-		fmt.Fprintf(flags.out, "%s\n", fd.PrettyPrint())
+	for _, fd := range fds {
+		fmt.Fprintf(stdout, "%s\n", fd.PrettyPrint())
 	}
-	if isError(err) {
-		fr.Close()
-		return errors.New(fmt.Sprintf("Error reading version file: %s", err))
-	}
-	if err = fr.Close(); err != nil {
-		return errors.New(fmt.Sprintf("Error reading version file: %s", err))
+	if errs > 0 {
+		return errors.New("Error! Some file info were invalid.")
 	}
 	return nil
 }
 
-func doVersions(flags *Flags, bkDir string) error {
-	bkDir, vm, _, _, err := setup(bkDir, flags.pwFile)
+func Versions(pwFile, repo string) error {
+	if repo == "" {
+		return errors.New("Backup repository must be specified.")
+	}
+	vm, _, _, err := setup(repo, pwFile)
 	if err != nil {
 		return err
 	}
 	versions, err := vm.GetVersions()
 	if err != nil {
-		return errors.New(fmt.Sprintf("Cannot read version files: %s", err))
+		return fmt.Errorf("Cannot read version files: %s", err)
 	}
 	for _, v := range versions {
-		fmt.Fprintf(flags.out, "%s\n", v)
+		fmt.Fprintf(stdout, "%s\n", v)
 	}
 	return nil
 }
 
-func doDeleteVersion(flags *Flags, bkDir, v string) error {
-	bkDir, vm, _, _, err := setup(bkDir, flags.pwFile)
+func DeleteVersion(pwFile, repo, version string) error {
+	if repo == "" {
+		return errors.New("Backup repository must be specified.")
+	}
+	if version == "" {
+		return errors.New("Version must be specified.")
+	}
+	vm, _, _, err := setup(repo, pwFile)
 	if err != nil {
 		return err
 	}
-	err = vm.DeleteVersion(v)
+	err = vm.DeleteVersion(version)
 	if err != nil {
-		return errors.New(fmt.Sprintf("Cannot delete version %s: %s", v, err))
+		return fmt.Errorf("Cannot delete version %s: %s", version, err)
 	}
 	return nil
 }
 
-func doDeleteOldVersions(flags *Flags, bkDir string) error {
-	bkDir, vm, _, _, err := setup(bkDir, flags.pwFile)
+func DeleteOldVersions(pwFile, repo string, dryRun bool) error {
+	if repo == "" {
+		return errors.New("Backup repository must be specified.")
+	}
+	vm, _, _, err := setup(repo, pwFile)
 	if err != nil {
 		return err
 	}
 	versions, err := vm.GetVersions()
 	if err != nil {
-		return errors.New(fmt.Sprintf("Cannot read version files: %s", err))
+		return fmt.Errorf("Cannot read version files: %s", err)
 	}
 	d := ReduceVersions(time.Now(), versions)
 	for _, v := range d {
-		fmt.Fprintf(flags.out, "Deleting version %s\n", v)
-		if !flags.dryRun {
+		fmt.Fprintf(stdout, "Deleting version %s\n", v)
+		if !dryRun {
 			err = vm.DeleteVersion(v)
 			if err != nil {
-				return errors.New(fmt.Sprintf("Cannot delete version %s: %s", v, err))
+				return fmt.Errorf("Cannot delete version %s: %s", v, err)
 			}
 		}
 	}
 	return nil
 }
 
-type verifyBackupResults struct {
-	numChunks, numOk, numFailed, numUnused int
+type VerifyRepoResults struct {
+	Chunks, Ok, Errors, Missing, Unused int
 }
 
-func doVerifyBackups(flags *Flags, bkDir string, r *verifyBackupResults) error {
-	bkDir, vm, cm, _, err := setup(bkDir, flags.pwFile)
+func VerifyRepo(pwFile, repo string, quick bool, r *VerifyRepoResults) error {
+	if repo == "" {
+		return errors.New("Backup repository must be specified.")
+	}
+	vm, cm, cfg, err := setup(repo, pwFile)
 	if err != nil {
 		return err
 	}
 	versions, err := vm.GetVersions()
 	if err != nil {
-		return errors.New(fmt.Sprintf("Cannot read version files: %s", err))
+		return fmt.Errorf("Cannot read version files: %s", err)
 	}
 	counts := cm.GetAllChunks()
+	fail := false
+	sort.Sort(sort.Reverse(sort.StringSlice(versions)))
 	for _, v := range versions {
-		fr, err := vm.LoadVersion(v)
+		var chunksError, chunksMissing int
+		var size int64
+		fds, err, nerrs := vm.LoadFiles(v)
 		if err != nil {
-			return errors.New(fmt.Sprintf("Cannot read version file: %s", err))
+			fmt.Fprintf(stderr, "Failed to read version %s : %s\n", v, err)
+			fail = true
+			continue
 		}
-		var fd *FileData
-		for fd, err = fr.Next(); err == nil; fd, err = fr.Next() {
-			for _, chunk := range fd.Chunks {
+		vChunks := make(map[FP]int)
+		for _, fd := range fds {
+			for i, chunk := range fd.Chunks {
+				size = size + int64(fd.Sizes[i])
+				vChunks[chunk]++
+				if vChunks[chunk] > 1 {
+					continue
+				}
 				counts[chunk]++
+				if counts[chunk] == 1 {
+					if quick {
+						if cm.FindChunk(chunk) {
+							r.Ok++
+						} else {
+							r.Missing++
+							chunksMissing++
+						}
+					} else {
+						b, err := cm.ReadChunk(chunk)
+						if err == nil && !matchChunkFP(cfg.FPSecret, chunk, b) {
+							err = fmt.Errorf("Mismatch fingerpint %s", chunk)
+						}
+						if err != nil {
+							if os.IsNotExist(err) {
+								fmt.Fprintf(stderr, "Missing chunk %s\n", chunk)
+								r.Missing++
+								chunksMissing++
+							} else {
+								fmt.Fprintf(stderr, "Error chunk %s : %s\n", chunk, err)
+								r.Errors++
+								chunksError++
+							}
+						} else {
+							r.Ok++
+						}
+					}
+				}
 			}
 		}
-		if isError(err) {
-			fr.Close()
-			return errors.New(fmt.Sprintf("Error reading version file: %s", err))
-		}
-		if err = fr.Close(); err != nil {
-			return errors.New(fmt.Sprintf("Error reading version file: %s", err))
+		chunks := len(vChunks)
+		chunksOk := chunks - chunksError - chunksMissing
+		if quick {
+			if nerrs > 0 {
+				fmt.Fprintf(stdout, "Version %s : %d bytes, %d chunk(s), %d missing. %d invalid file info.\n", v, size, chunks, chunksMissing, nerrs)
+			} else {
+				fmt.Fprintf(stdout, "Version %s : %d bytes, %d chunk(s), %d missing.\n", v, size, chunks, chunksMissing)
+			}
+		} else {
+			if nerrs > 0 {
+				fmt.Fprintf(stdout, "Version %s : %d bytes, %d chunk(s), %d good, %d bad, %d missing. %d invalid file info.\n", v, size, chunks, chunksOk, chunksError, chunksMissing, nerrs)
+			} else {
+				fmt.Fprintf(stdout, "Version %s : %d bytes, %d chunk(s), %d good, %d bad, %d missing.\n", v, size, chunks, chunksOk, chunksError, chunksMissing)
+			}
 		}
 	}
-	buf := &Buf{}
-	numChunks, numOk, numFailed, numUnused := verifyChunks(cm, buf, counts)
-	fmt.Fprintf(flags.out, "%d chunks, %d ok, %d failed, %d unused\n", numChunks, numOk, numFailed, numUnused)
-	if r != nil {
-		r.numChunks = numChunks
-		r.numOk = numOk
-		r.numFailed = numFailed
-		r.numUnused = numUnused
+	for _, count := range counts {
+		r.Chunks++
+		if count == 0 {
+			r.Unused++
+		}
+	}
+	fmt.Fprintf(stdout, "Summary: %d chunk(s), %d good, %d bad, %d missing, %d unused\n", r.Chunks, r.Ok, r.Errors, r.Missing, r.Unused)
+	if fail || r.Errors > 0 || r.Missing > 0 {
+		return errors.New("Error verifying repo.")
 	}
 	return nil
 }
 
-func doPurgeUnused(flags *Flags, bkDir string) error {
-	bkDir, vm, cm, _, err := setup(bkDir, flags.pwFile)
+func PurgeUnused(pwFile, repo string, dryRun, verbose bool) error {
+	if repo == "" {
+		return errors.New("Backup repository must be specified.")
+	}
+	vm, cm, _, err := setup(repo, pwFile)
 	if err != nil {
 		return err
 	}
 	versions, err := vm.GetVersions()
 	if err != nil {
-		return errors.New(fmt.Sprintf("Cannot read version files: %s", err))
+		return fmt.Errorf("Cannot read version files: %s", err)
 	}
 	counts := cm.GetAllChunks()
+	total_chunks := len(counts)
 	for _, v := range versions {
-		fr, err := vm.LoadVersion(v)
+		fds, err, errs := vm.LoadFiles(v)
 		if err != nil {
-			return errors.New(fmt.Sprintf("Cannot read version file: %s", err))
+			return fmt.Errorf("Cannot read version file: %s", err)
 		}
-		var fd *FileData
-		for fd, err = fr.Next(); err == nil; fd, err = fr.Next() {
+		if errs > 0 {
+			return fmt.Errorf("Error! Some file info were invalid in version %s", v)
+		}
+		for _, fd := range fds {
 			for _, chunk := range fd.Chunks {
 				delete(counts, chunk)
 			}
 		}
-		if isError(err) {
-			fr.Close()
-			return errors.New(fmt.Sprintf("Error reading version file: %s", err))
-		}
-		if err = fr.Close(); err != nil {
-			return errors.New(fmt.Sprintf("Error reading version file: %s", err))
-		}
 	}
 	numDeleted := 0
 	numFailed := 0
-	var sizeDeleted int64
-	var sizeFailed int64
 	for chunk, _ := range counts {
-		_, size, ok := DecodeChunkName(chunk)
-		if ok {
-			ok = cm.DeleteChunk(chunk)
-		}
-		if ok {
+		if dryRun {
+			if verbose {
+				fmt.Fprintf(stdout, "Delete %s\n", chunk)
+			}
 			numDeleted++
-			sizeDeleted += int64(size)
-			debugP("DELETED %s (%d)\n", chunk, size)
 		} else {
-			numFailed++
-			sizeFailed += int64(size)
-			debugP("FAILED %s %d\n", chunk, size)
+			if cm.DeleteChunk(chunk) {
+				numDeleted++
+				if verbose {
+					fmt.Fprintf(stdout, "Deleted %s\n", chunk)
+				}
+			} else {
+				numFailed++
+				if verbose {
+					fmt.Fprintf(stdout, "Failed to delete %s\n", chunk)
+				}
+			}
 		}
 	}
-	notOne := func(x int) string {
-		if x == 1 {
-			return ""
-		} else {
-			return "s"
-		}
+	if dryRun {
+		fmt.Fprintf(stdout, "Chunks to be purged (dryrun): %d out of %d.\n", numDeleted, total_chunks)
+	} else {
+		fmt.Fprintf(stdout, "Chunks purged: %d out of %d.\n", numDeleted, total_chunks)
 	}
-	fmt.Fprintf(flags.out, "Deleted %d chunk%s (%d bytes).\n", numDeleted, notOne(numDeleted), sizeDeleted)
 	if numFailed > 0 {
-		return errors.New(fmt.Sprintf("Failed to delete %d chunk%s (%d bytes).", numFailed, notOne(numFailed), sizeFailed))
+		return fmt.Errorf("Failed to purge %d chunk(s).", numFailed)
 	}
 	return nil
-}
-
-//---------------------------------------------------------------------------
-
-func usageAndExit() {
-	fmt.Fprintf(os.Stderr, `Usage:
-  vecbackup help
-  vecbackup init [-pw <pwfile>] [-chunksize size] [-pbkdf2iterations num] <backupdir>
-  vecbackup backup [-v] [-cs] [-n] [-setversion <version>] [-pw <pwfile>] <backupdir> <srcdir> [<subpath> ...]
-  vecbackup ls [-version <version>] [-pw <pwfile>] <backupdir>
-  vecbackup versions [-pw <pwfile>] <backupdir>
-  vecbackup recover [-n] [-t] [-version <version>] [-merge] [-pw <pwfile>] <backupdir> <recoverydir> [<subpath> ...]
-  vecbackup deleteversion [-pw <pwfile>] <backupdir> <version>
-  vecbackup deleteoldversions [-n] [-pw <pwfile>] <backupdir>
-  vecbackup verifybackups [-pw <pwfile>] <backupdir>
-  vecbackup purgeunused [-pw <pwfile>] <backupdir>
-`)
-	os.Exit(1)
-}
-
-func usageStdoutAndExit() {
-	fmt.Fprintf(os.Stdout, `Usage:
-  vecbackup help
-  vecbackup init [-pw <pwfile>] [-chunksize size] [-pbkdf2iterations num] <backupdir>
-      -chunksize    files are broken into chunks of this size.
-      -pbkdf2iterations
-                    number of iterations for PBKDF2 key generation.
-                    Minimum 100,000.
-    Initialize a new backup directory.
-
-  vecbackup backup [-v] [-cs] [-n] [-setversion <version>] [-pw <pwfile>] <backupdir> <srcdir> [<subpath> ...]
-    Incrementally and recursively backs up the files, directories and symbolic
-    links (items) in <srcdir> to <backupdir>. If one or more <subpath> are
-    specified, only backup those subpaths. <subpaths> are relative to <srcdir>.
-    Prints the items that are added (+), removed (-) from or updated (*).
-    Files that have not changed in same size and timestamp are not backed up
-    again.
-      -v            verbose, prints the names of all items backed up
-      -cs           use checksums to detect if files have changed
-      -n            dry run, show what would have been backed up
-      -setversion   save as the given version, instead of the current time
-
-  vecbackup versions [-pw <pwfile>] <backupdir>
-    Lists all backup versions in chronological order. The version name is a
-    timestamp in UTC formatted with RFC3339Nano format (YYYY-MM-DDThh:mm:ssZ).
-
-  vecbackup ls [-version <version>] [-pw <pwfile>] <backupdir>
-    Lists files in <backupdir>.
-    -version <version>   list the files in that version
-
-  vecbackup recover [-n] [-t] [-version <version>] [-merge] [-pw <pwfile>] <backupdir> <recoverydir> [<subpath> ...]
-    Recovers all the items or the given <subpaths> to <recoverydir>.
-    <recoverydir> must not already exist.
-      -n            dry run, show what would have been recovered
-      -t            test run, test recovering the files but don't write
-      -version <version>
-                    recover that given version. Defaults to "latest"
-      -merge        merge the recovered files into the given <recoverydir>
-                    if it already exists. Files of the same size and timestamp
-                    are not extracted again. This can be used to resume
-                    a previous recover operation.
-
-  vecbackup delete-version [-pw <pwfile>] <backupdir> <version>
-    Deletes the given version. No chunks are deleted.
-
-  vecbackup delete-old-versions [-n] [-pw <pwfile>] <backupdir>
-    Deletes old versions. No chunks are deleted.
-    Keeps all versions within one day, one version per hour for the last week,
-    one version per day in the last month, one version per week in the last 
-    year and one version per month otherwise.
-      -n            dry run, show versions that would have been deleted
-
-  vecbackup verify-backups [-pw <pwfile>] <backupdir>
-    Verifies that all the chunks used by all the files in all versions
-    can be read and match their checksums.
-
-  vecbackup purge-old-data [-pw <pwfile>] <backupdir>
-    Deletes chunks that are not used by any file in any backup version.
-
-Other common flags:
-      -pw           file containing the password
-
-Files:
-  vecbackup-ignore
-
-    If vecbackup-ignore exists in the <backupdir>, each line is treated as a
-    pattern to match against the items. Any items with names that match
-    the patterns are ignored for new backup operations. This does not affect
-    the backups in previous versions.
-
-    Ignore Patterns:
-
-      Patterns that do not start with a '/' are matched against the filename
-      only.
-      Patterns that start with a '/' are matched against the sub-path relative
-      to src directory.
-      * matches any sequence of non-separator characters.
-      ? matches any single non-separator character.
-      See https://golang.org/pkg/path/filepath/#Match
-`)
-	os.Exit(1)
-}
-
-var debugF = flag.Bool("debug", false, "Show debug info.")
-var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
-var memprofile = flag.String("memprofile", "", "write memory profile to `file`")
-
-type Flags struct {
-	verbose          bool
-	checksum         bool
-	dryRun           bool
-	testRun          bool
-	setVersion       string
-	version          string
-	merge            bool
-	pwFile           string
-	out              io.Writer
-	chunkSize        int
-	pbkdf2Iterations int
-}
-
-func InitFlags() *Flags {
-	flags := &Flags{}
-	flag.BoolVar(&flags.verbose, "v", false, "Verbose")
-	flag.BoolVar(&flags.checksum, "cs", false, "Use checksums to check if file contents have changed.")
-	flag.BoolVar(&flags.dryRun, "n", false, "Dry run.")
-	flag.BoolVar(&flags.testRun, "t", false, "Test run.")
-	flag.StringVar(&flags.version, "version", "latest", `The version to operate on or the special keyword "latest".`)
-	flag.StringVar(&flags.setVersion, "setversion", "", "Set to this version instead of using the current time.")
-	flag.BoolVar(&flags.merge, "merge", false, "Merge into existing directory.")
-	flag.StringVar(&flags.pwFile, "pw", "", "File containing password")
-	flags.out = os.Stdout
-	flag.IntVar(&flags.chunkSize, "chunksize", DEFAULT_CHUNK_SIZE, "Chunk size")
-	flag.IntVar(&flags.pbkdf2Iterations, "pbkdf2iterations", DEFAULT_PBKDF2_ITERATIONS, "PBKDF2 iteration count")
-	log.SetFlags(0)
-	return flags
-}
-
-func debugP(fmt string, v ...interface{}) {
-	if *debugF {
-		log.Printf(fmt, v...)
-	}
-}
-
-func exitIfError(err error) {
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s\n", err)
-		os.Exit(1)
-	}
-}
-
-func Main() {
-	flags := InitFlags()
-	if len(os.Args) < 2 {
-		usageAndExit()
-	}
-	cmd := os.Args[1]
-	os.Args = append([]string{os.Args[0]}, os.Args[2:]...)
-	flag.Parse()
-	if *cpuprofile != "" {
-		f, err := os.Create(*cpuprofile)
-		if err != nil {
-			panic(fmt.Sprintf("could not create cpu profile: %v", err))
-		}
-		pprof.StartCPUProfile(f)
-		defer pprof.StopCPUProfile()
-	}
-	if cmd == "init" {
-		if flag.NArg() < 1 {
-			usageAndExit()
-		}
-		exitIfError(doInit(flags, flag.Arg(0)))
-	} else if cmd == "help" {
-		usageStdoutAndExit()
-	} else if cmd == "backup" {
-		if flag.NArg() < 2 {
-			usageAndExit()
-		}
-		exitIfError(doBackup(flags, flag.Arg(0), flag.Arg(1), flag.Args()[2:]))
-	} else if cmd == "ls" {
-		if flag.NArg() != 1 {
-			usageAndExit()
-		}
-		exitIfError(doLs(flags, flag.Arg(0)))
-	} else if cmd == "recover" {
-		if flag.NArg() < 2 {
-			usageAndExit()
-		}
-		exitIfError(doRecover(flags, flag.Arg(0), flag.Arg(1), flag.Args()[2:]))
-	} else if cmd == "versions" {
-		if flag.NArg() != 1 {
-			usageAndExit()
-		}
-		exitIfError(doVersions(flags, flag.Arg(0)))
-	} else if cmd == "deleteversion" {
-		if flag.NArg() != 2 {
-			usageAndExit()
-		}
-		exitIfError(doDeleteVersion(flags, flag.Arg(0), flag.Arg(1)))
-	} else if cmd == "deleteoldversions" {
-		if flag.NArg() != 1 {
-			usageAndExit()
-		}
-		exitIfError(doDeleteOldVersions(flags, flag.Arg(0)))
-	} else if cmd == "verifybackups" {
-		if flag.NArg() != 1 {
-			usageAndExit()
-		}
-		exitIfError(doVerifyBackups(flags, flag.Arg(0), nil))
-	} else if cmd == "purgeunused" {
-		if flag.NArg() != 1 {
-			usageAndExit()
-		}
-		exitIfError(doPurgeUnused(flags, flag.Arg(0)))
-	} else {
-		usageAndExit()
-	}
-	if *memprofile != "" {
-		f, err := os.Create(*memprofile)
-		if err != nil {
-			panic(fmt.Sprintf("could not create memory profile: %v", err))
-		}
-		//runtime.GC() // get up-to-date statistics
-		if err := pprof.WriteHeapProfile(f); err != nil {
-			panic(fmt.Sprintf("could not write memory profile: %v", err))
-		}
-		f.Close()
-	}
 }

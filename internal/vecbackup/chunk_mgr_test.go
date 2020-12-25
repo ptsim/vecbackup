@@ -7,40 +7,39 @@ import (
 	"testing"
 )
 
-func makeName(b []byte) string {
-	cs := sha512.Sum512_256(b)
-	return MakeChunkName(cs[:], len(b))
+func TestCMNoEnc(t *testing.T) {
+	testCMhelper(t, nil)
 }
 
-func TestCM(t *testing.T) {
-	removeAll(t, BKDIR)
-	defer removeAll(t, BKDIR)
-	cm := MakeChunkMgr(BKDIR, nil)
-	buf := &Buf{}
-	N := 10000
+func TestCMEnc(t *testing.T) {
+	var key EncKey = sha512.Sum512_256([]byte("f0839nskjdncw98ehjflsahflas"))
+	testCMhelper(t, &key)
+}
+
+func testCMhelper(t *testing.T, key *EncKey) {
+	removeAll(t, REPO)
+	defer removeAll(t, REPO)
+	cm := MakeCMgr(REPO, key, CompressionMode_YES)
+	N := 100000
 	data := make([]byte, N)
 	rand.Seed(1)
 	rand.Read(data)
-	names := make([]string, N)
-	for i := 0; i < N; i++ {
-		b := buf.SetSize(i)
-		copy(b, data[:i])
-		name := makeName(b)
-		err := cm.AddChunk(name, buf.B())
+	var names []FP
+	for l := 0; l < N; l = 2*l + 1 {
+		text := data[:]
+		var fp FP = sha512.Sum512_256(text)
+		_, _, err := cm.AddChunk(fp, text)
 		if err != nil {
-			t.Fatalf("AddChunk failed: %v %s", name, err)
+			t.Fatalf("AddChunk failed: %s %s", fp, err)
 		}
-		names[i] = name
+		t.Logf("Added chunk %s\n", fp)
+		names = append(names, fp)
 	}
-	for i := 0; i < N; i++ {
-		name := names[i]
-		_, size, _ := DecodeChunkName(name)
-		buf.SetSize(size)
-		err := cm.ReadChunk(name, buf.B())
+	for _, fp := range names {
+		b, err := cm.ReadChunk(fp)
 		if err != nil {
-			t.Fatalf("ReadChunk failed: %v %s", name, err)
+			t.Fatalf("ReadChunk failed: %s %s", fp, err)
 		}
-		b := buf.B()
 		n := len(b)
 		if bytes.Compare(b, data[:n]) != 0 {
 			t.Fatalf("Chunk %d is wrong\n", n)

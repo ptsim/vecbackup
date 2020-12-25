@@ -1,166 +1,210 @@
 package vecbackup
 
 import (
-	"encoding/base32"
+	"bytes"
+	"compress/zlib"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/ioutil"
-	"math"
 	"os"
 	"path"
-	"strconv"
 )
 
-const CS_LEN = 56
-
-func MakeChunkName(cs CS, size int) string {
-	return base32.HexEncoding.EncodeToString(cs) + fmt.Sprintf("%08x", size)
-}
-
-func DecodeChunkName(s string) (CS, int, bool) {
-	cs, err := base32.HexEncoding.DecodeString(s[:CS_LEN])
-	if err != nil {
-		return cs, 0, false
-	}
-	size, err := strconv.ParseInt(s[CS_LEN:], 16, 32)
-	if err != nil {
-		return cs, 0, false
-	}
-	return cs, int(size), true
-}
-
-//---------------------------------------------------------------------------
-
-type ChunkMgr interface {
-	AddChunk(name string, buf []byte) error
-	ReadChunk(name string, buf []byte) error
-	FindChunk(name string) bool
-	DeleteChunk(name string) bool
-	GetAllChunks() map[string]int
-}
-
-func MakeChunkMgr(bkDir string, key *[32]byte) ChunkMgr {
-	return &CMgr{dir: path.Join(bkDir, CHUNK_DIR), key: key}
-}
-
-//---------------------------------------------------------------------------
-
 type CMgr struct {
-	dir string
-	key *[32]byte
+	dir      string
+	key      *EncKey
+	compress CompressionMode
 }
 
-func computeChunkDirPrefix(name string) string {
-	if len(name) < 3 {
-		return ""
+func MakeCMgr(repo string, key *EncKey, compress CompressionMode) *CMgr {
+	return &CMgr{dir: path.Join(repo, CHUNK_DIR), key: key, compress: compress}
+}
+
+const DIR_PREFIX_SIZE = 2
+
+func FPtoName(fp FP) string {
+	return fmt.Sprintf("%x", [32]byte(fp))
+}
+
+func nameToFP(name string) (FP, error) {
+	var fp FP
+	x, err := hex.DecodeString(name)
+	if err != nil || len(x) != len(fp) {
+		return fp, fmt.Errorf("Invalid chunk name: %s\n", name)
 	}
-	return path.Join(name[:1], name[1:2], name[2:3])
+	copy(fp[:], x)
+	return fp, nil
 }
 
-func (cm *CMgr) FindChunk(name string) bool {
-	fp := path.Join(cm.dir, computeChunkDirPrefix(name), name)
-	_, err := os.Stat(fp)
+func (cm *CMgr) FindChunk(fp FP) bool {
+	name := FPtoName(fp)
+	p := path.Join(cm.dir, name[:DIR_PREFIX_SIZE], name)
+	_, err := os.Stat(p)
 	return err == nil
 }
 
-func (cm *CMgr) ReadChunk(name string, buffer []byte) error {
-	fp := path.Join(cm.dir, computeChunkDirPrefix(name), name)
-	ciphertext, err := ioutil.ReadFile(fp)
+func (cm *CMgr) ReadChunk(fp FP) ([]byte, error) {
+	name := FPtoName(fp)
+	f := path.Join(cm.dir, name[:DIR_PREFIX_SIZE], name)
+	ciphertext, err := ioutil.ReadFile(f)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var text []byte
-	if cm.key == nil {
-		text, err = gunzipBytes(ciphertext)
+	if cm.key != nil {
+		text, err = decryptBytes(cm.key, ciphertext)
+		if err != nil {
+			return nil, err
+		}
 	} else {
-		text, err = decGunzipBytes(cm.key, ciphertext)
+		text = ciphertext
 	}
-	if err != nil {
-		return err
-	}
-	if len(text) < len(buffer) {
-		return errors.New("Chunk too small")
-	} else if len(text) > len(buffer) {
-		return errors.New("Chunk too big")
-	}
-	copy(buffer, text)
-	return nil
+	return uncompressChunk(text)
 }
 
-func writeChunkToFile(p string, k *[32]byte, chunk []byte) error {
+func (cm *CMgr) AddChunk(fp FP, chunk []byte) (bool, int, error) {
 	var ciphertext []byte
-	var err error = nil
-	if k == nil {
-		ciphertext = gzipBytes(chunk)
-	} else {
-		ciphertext, err = encGzipBytes(k, chunk)
+	var err error
+	if cm.FindChunk(fp) {
+		return true, 0, nil
 	}
+	ciphertext, err = compressChunk(chunk, cm.compress)
 	if err != nil {
-		return err
+		return false, 0, err
 	}
-	return ioutil.WriteFile(p, ciphertext, 0444)
-}
-
-func (cm *CMgr) AddChunk(name string, chunk []byte) error {
-	size := len(chunk)
-	if cm.FindChunk(name) {
-		return nil
+	if cm.key != nil {
+		ciphertext, err = encryptBytes(cm.key, ciphertext)
+		if err != nil {
+			return false, 0, err
+		}
 	}
-	debugP("Adding chunk %s, len %d\n", name, size)
-	dir := path.Join(cm.dir, computeChunkDirPrefix(name))
-	fp := path.Join(dir, name)
-	tfp := fp + TEMP_FILE_SUFFIX
+	name := FPtoName(fp)
+	dir := path.Join(cm.dir, name[:DIR_PREFIX_SIZE])
+	f := path.Join(dir, name)
+	tf := f + TEMP_FILE_SUFFIX
 	os.MkdirAll(dir, DEFAULT_DIR_PERM)
-	err := writeChunkToFile(tfp, cm.key, chunk)
+	err = ioutil.WriteFile(tf, ciphertext, DEFAULT_FILE_PERM)
+	compressedLen := len(ciphertext)
 	if err == nil {
-		err = os.Rename(tfp, fp)
+		err = os.Rename(tf, f)
 	}
 	if err != nil {
-		os.Remove(tfp)
-		return err
+		os.Remove(tf)
+		return false, 0, err
 	}
-	return nil
+	return false, compressedLen, nil
 }
 
-func (cm *CMgr) DeleteChunk(name string) bool {
-	p := path.Join(cm.dir, computeChunkDirPrefix(name), name)
+func (cm *CMgr) DeleteChunk(fp FP) bool {
+	name := FPtoName(fp)
+	p := path.Join(cm.dir, name[:DIR_PREFIX_SIZE], name)
 	return os.Remove(p) == nil
 }
 
-func (cm *CMgr) getChunks(sub string, depth int, items map[string]int) error {
-	p := path.Join(cm.dir, sub)
-	files, err := ioutil.ReadDir(p)
+func (cm *CMgr) getSubChunks(prefix string, items map[FP]int) error {
+	files, err := ioutil.ReadDir(path.Join(cm.dir, prefix))
 	if err != nil {
 		return err
 	}
 	for _, f := range files {
-		if depth < CHUNK_DIR_DEPTH {
-			if f.IsDir() && len(f.Name()) == 1 {
-				cm.getChunks(path.Join(sub, f.Name()), depth+1, items)
+		name := f.Name()
+		if f.Mode().IsRegular() && prefix == name[:DIR_PREFIX_SIZE] {
+			if fp, err := nameToFP(name); err == nil {
+				items[fp] = 0
 			}
-		} else if depth == CHUNK_DIR_DEPTH {
-			if !f.Mode().IsRegular() {
-				continue
-			}
-			name := f.Name()
-			if sub != computeChunkDirPrefix(name) {
-				continue
-			}
-			_, size, ok := DecodeChunkName(name)
-			if !ok {
-				continue
-			}
-			if size > math.MaxInt32 {
-				return errors.New(fmt.Sprintf("Chunk %s is too big: %v\n", f.Name(), f.Size()))
-			}
-			items[name] = 0
 		}
 	}
 	return nil
 }
 
-func (cm *CMgr) GetAllChunks() map[string]int {
-	counts := make(map[string]int)
-	cm.getChunks("", 0, counts)
-	return counts
+func (cm *CMgr) GetAllChunks() map[FP]int {
+	items := make(map[FP]int)
+	files, err := ioutil.ReadDir(cm.dir)
+	if err != nil {
+		return items // TODO error
+	}
+	for _, f := range files {
+		if f.IsDir() && len(f.Name()) == DIR_PREFIX_SIZE {
+			cm.getSubChunks(f.Name(), items) // TODO error
+		}
+	}
+	return items
+}
+
+func prefixAndCompress(d []byte) ([]byte, error) {
+	var zlibBuf bytes.Buffer
+	zlibBuf.WriteByte(byte(CompressionType_ZLIB))
+	zlw := zlib.NewWriter(&zlibBuf)
+	if n, err := zlw.Write(d); err != nil {
+		return nil, err
+	} else if n != len(d) {
+		return nil, errors.New("Zlib write failed")
+	}
+	if zlw.Close() != nil {
+		return nil, errors.New("Zlib close failed")
+	}
+	return zlibBuf.Bytes(), nil
+}
+
+func prefixNoCompress(d []byte) ([]byte, error) {
+	return append([]byte{byte(CompressionType_NO_COMPRESSION)}, d...), nil
+}
+
+const PREFIX_CHECK_SIZE = 4096
+
+func compressChunk(text []byte, m CompressionMode) ([]byte, error) {
+	if m == CompressionMode_AUTO {
+		if len(text) < 128 {
+			m = CompressionMode_NO
+		} else if len(text) < PREFIX_CHECK_SIZE {
+			out, err := prefixAndCompress(text)
+			if err != nil {
+				return nil, err
+			}
+			if len(out) <= len(text) {
+				return out, nil
+			}
+			m = CompressionMode_NO
+		} else {
+			test := text[:PREFIX_CHECK_SIZE]
+			out, err := prefixAndCompress(test)
+			if err != nil {
+				return nil, err
+			}
+			if len(out) <= len(test) {
+				m = CompressionMode_SLOW
+			} else {
+				m = CompressionMode_NO
+			}
+		}
+	}
+	if m == CompressionMode_SLOW {
+		out, err := prefixAndCompress(text)
+		if err != nil {
+			return nil, err
+		}
+		if len(out) <= len(text) {
+			return out, nil
+		}
+		m = CompressionMode_NO
+	}
+	if m == CompressionMode_NO {
+		return prefixNoCompress(text)
+	}
+	return prefixAndCompress(text)
+}
+
+func uncompressChunk(zlibText []byte) ([]byte, error) {
+	if zlibText[0] == 0 {
+		return zlibText[1:], nil
+	} else if zlibText[0] != 1 {
+		return nil, errors.New("Not encrypted")
+	}
+	if zlr, err := zlib.NewReader(bytes.NewBuffer(zlibText[1:])); err == nil {
+		defer zlr.Close()
+		return ioutil.ReadAll(zlr)
+	} else {
+		return nil, err
+	}
 }

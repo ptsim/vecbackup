@@ -1,18 +1,22 @@
 package vecbackup
 
 import (
-	"bytes"
-	"compress/gzip"
 	"crypto/rand"
 	"crypto/sha1"
 	"errors"
+	"fmt"
 	"golang.org/x/crypto/nacl/secretbox"
 	"golang.org/x/crypto/pbkdf2"
 	"io"
-	"io/ioutil"
 )
 
-func encryptBytes(key *[32]byte, text []byte) ([]byte, error) {
+type EncKey [32]byte
+
+func (key EncKey) String() string {
+	return fmt.Sprintf("Key-%x", []byte(key[:]))
+}
+
+func encryptBytes(key *EncKey, text []byte) ([]byte, error) {
 	// from golang secretbox example
 	// You must use a different nonce for each message you encrypt with the
 	// same key. Since the nonce here is 192 bits long, a random value
@@ -23,76 +27,42 @@ func encryptBytes(key *[32]byte, text []byte) ([]byte, error) {
 	}
 
 	// This encrypts the text and appends the result to the nonce.
-	encrypted := secretbox.Seal(nonce[:], text, &nonce, key)
+	encrypted := secretbox.Seal(nonce[:], text, &nonce, (*[32]byte)((key)))
 	return encrypted, nil
 }
 
-func decryptBytes(key *[32]byte, encrypted []byte) ([]byte, error) {
+func decryptBytes(key *EncKey, encrypted []byte) ([]byte, error) {
 	var nonce [24]byte
 	copy(nonce[:], encrypted[:24])
-	decrypted, ok := secretbox.Open(nil, encrypted[24:], &nonce, key)
+	decrypted, ok := secretbox.Open(nil, encrypted[24:], &nonce, (*[32]byte)(key))
 	if !ok {
 		return nil, errors.New("secretbox.Open failed")
 	}
 	return decrypted, nil
 }
 
-func encGzipBytes(key *[32]byte, text []byte) ([]byte, error) {
-	var gzipBuf bytes.Buffer
-	gzw := gzip.NewWriter(&gzipBuf)
-	gzw.Write(text)
-	gzw.Close()
-	return encryptBytes(key, gzipBuf.Bytes())
-}
-
-func decGunzipBytes(key *[32]byte, encrypted []byte) ([]byte, error) {
-	gzipText, err := decryptBytes(key, encrypted)
-	if err != nil {
-		return nil, err
-	}
-	gz, err := gzip.NewReader(bytes.NewBuffer(gzipText))
-	if err != nil {
-		return nil, err
-	}
-	defer gz.Close()
-	return ioutil.ReadAll(gz)
-}
-
-func gzipBytes(text []byte) []byte {
-	var gzipBuf bytes.Buffer
-	gzw := gzip.NewWriter(&gzipBuf)
-	gzw.Write(text)
-	gzw.Close()
-	return gzipBuf.Bytes()
-}
-
-func gunzipBytes(gzipText []byte) ([]byte, error) {
-	gz, err := gzip.NewReader(bytes.NewBuffer(gzipText))
-	if err != nil {
-		return nil, err
-	}
-	defer gz.Close()
-	return ioutil.ReadAll(gz)
-}
-
-func GenKey(pw []byte, rounds int) ([]byte, *[32]byte, *[32]byte, error) {
+func genKey(pw []byte, rounds int) ([]byte, *EncKey, *EncKey, []byte, error) {
 	salt := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	key := pbkdf2.Key(pw, salt, rounds, 32, sha1.New)
-	var masterKey [32]byte
+	var masterKey EncKey
 	copy(masterKey[:], key)
-	var storageKey [32]byte
+	var storageKey EncKey
 	if _, err := io.ReadFull(rand.Reader, storageKey[:]); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return salt, &masterKey, &storageKey, nil
+	fpSecret := make([]byte, 64)
+	if _, err := io.ReadFull(rand.Reader, fpSecret); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return salt, &masterKey, &storageKey, fpSecret, nil
 }
 
-func GetMasterKey(pw, salt []byte, rounds int) *[32]byte {
+func getMasterKey(pw, salt []byte, rounds int) *EncKey {
 	key := pbkdf2.Key(pw, salt, rounds, 32, sha1.New)
-	var masterKey [32]byte
+	var masterKey EncKey
 	copy(masterKey[:], key)
 	return &masterKey
 }

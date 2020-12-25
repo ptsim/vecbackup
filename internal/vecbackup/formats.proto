@@ -1,0 +1,62 @@
+// protoc --go_out=. --go_opt=paths=source_relative *.proto
+//
+
+syntax = "proto3";
+
+option go_package = "github.com/ptsim/vecbackup/internal/vecbackup";
+
+import "google/protobuf/timestamp.proto";
+
+enum FileType {
+	REGULAR_FILE = 0;
+	DIRECTORY    = 1;
+	SYMLINK      = 2;
+}
+
+message NodeDataProto {
+	string name = 1;
+	FileType type = 2;
+	int64 size = 3;
+	google.protobuf.Timestamp mod_time = 4;
+	int32 perm = 5;
+	bytes FileChecksum = 6;
+	string target = 7;
+	repeated int32 Sizes = 8;
+	repeated bytes Chunks = 9;
+}
+
+message VersionProto {
+	int32 version = 1;
+}
+
+message ConfigProto {
+	int32 ChunkSize = 1;
+	bytes EncryptionKey = 2;
+	bytes FPSecret = 3;
+	CompressionMode Compress = 4;
+}
+
+enum EncType {
+     NO_ENCRYPTION = 0;
+     SYMMETRIC = 1;
+}
+
+message EncConfigProto {
+	int32 Version = 1;
+	EncType Type = 2;
+	int64 Iterations = 3;
+	bytes Salt = 4;
+	bytes Config = 5;
+}
+
+enum CompressionType {
+     NO_COMPRESSION = 0;
+     ZLIB = 1;
+}
+
+enum CompressionMode {
+     AUTO = 0;
+     SLOW = 1;
+     NO = 2;
+     YES = 3;
+}
