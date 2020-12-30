@@ -2,7 +2,7 @@
 
 Versioned Encrypted Compressed backup.
 
-* Backs up multiple versions locally
+* Backup multiple versions locally or to the cloud or remote destinations using rclone.
 * De-duplicates based on content checksums (sha512_256)
 * Optionally compresses (zlib)
 * Optionally password protect and encrypt backups with authenticated encryption (PBKDF2+NaCl)
@@ -21,6 +21,10 @@ First, initialize the backup repository:
 Or, instead, initialize the backup repository with compression mode "slow", chunk size 1048576 and password in the password file ```/d/pwfile```:
 
 ```vecbackup init -r /b/mybackup -compress slow -chunk-size 1048576 -pw /d/pwfile```
+
+Or, initialize a remote repository using rclone (```remote:path/to/dir```):
+
+```vecbackup init -r rclone:remote:path/to/dir```
 
 If the repository has been initialized with a password, all other commands must be used with the ```-pw <password file>``` flag.
 
@@ -135,7 +139,7 @@ You will find the ```vecbackup``` binary in the current directory.
 ### How do I automate or schedule my backups?
 * I used crontab to run the backups automatically.
 * When a backup is running, it maintains a ```lock``` file in the repository to prevent another instance from backing up to the same repository. This makes it easy to run timed backups without worrying about previous backups taking too long to complete.
-* If a backup crashes for some reason, you may have to remove the ```lock``` file manually.
+* If a backup crashes for some reason, you may have to remove the ```lock``` file manually using the ```vecbackup remove-lock``` command.
 * The lock file is only used for the ```vecbackup backup``` command. The other commands can be run concurrently.
 
 ### Q: Can I have multiple "backup sets"?
@@ -200,12 +204,20 @@ You will find the ```vecbackup``` binary in the current directory.
 * All extra versions are deleted
 * The unused chunk files are not deleted until you run ```vecbackup purge-unused```.
 
-### Q: Why don't you use XYZ software instead?
-* Because various XYZ software have limitations that do not meet my requirements.
-* This was a pet project started many years ago when options were more limited and it has gone through many rewrites as requirements change.
-
 ### Q: Can this back up directly to the cloud?
-* No. For now. I use ```rclone sync``` to copy the repository to a cloud storage provider.
+* Yes!
+* Configure a ```rclone``` remote for the cloud storage provider. Check that the remote works with ```rclone```. See ```rclone``` documentation.
+* Use ```-r rclone:remote:path/to/dir``` flag for indicate the remote repository.
+* Use ```-rclone-binary <path-to-rclone>``` to set the path of the ```rclone``` program.
+* Use ```-lock-file <path-to-lock-file>``` flag to the ```backup``` command if you want to use a local lock file.
+* Note: the lock file is only used for the ```backup``` command. Using a remote lock file is most likely not safe against race conditions. ```rclone``` commands are probably not atomic. However, running two backups to the same repository at the same time is fine although it is not recommended.
+* The layout within the remote path is identical to a local repository.
+* You can ```rclone sync``` a remote repository to a local directory and then use it as a local repository and vice versa.
+* This has only been tested using the S3 rclone backend with Wasabi's cloud storage.
+
+### Q: Why don't you use <...> backup software instead?
+* Because various backup software have limitations that do not meet my requirements.
+* This was a pet project started many years ago when options were more limited and it has gone through many rewrites as requirements change.
 
 ### Q: Is this ready for use?
 * **This is an alpha release.**
