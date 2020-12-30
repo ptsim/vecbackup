@@ -143,7 +143,7 @@ You will find the ```vecbackup``` binary in the current directory.
 * The lock file is only used for the ```vecbackup backup``` command. The other commands can be run concurrently.
 
 ### Q: Can I have multiple "backup sets"?
-* Yes, just backup different data to different backup directories.
+* Yes, just backup different data to different backup repositories.
 
 ### Q: How do I know if the files are recovered correctly?
 * Each chunk has a sha512_256 checksum.
@@ -179,7 +179,7 @@ You will find the ```vecbackup``` binary in the current directory.
 * Chunks are named with the sha512_256(fingerprint secret + sha512_256(original chunk content)). 
 
 ## Q: How do I tell vecbackup to exclude certain files?
-* Use the -exclude-file <exclude_file> option to the backup command.
+* Use the -exclude-from <exclude_file> option to the backup command.
 * Each line in the <exclude_file> is a pattern containing files to ignore.
 * Run ```vecbackup help``` for more details.
 * Example file:
