@@ -111,6 +111,12 @@ Common flags:
       -pw           file containing the password
       -rclone-binary  Path to the "rclone" program
 
+Remote repository:
+  If the repository path starts with "rclone:", the rest of the path is passed to rclone
+  as the location of the repository. For example, if the repo path is "rclone:remote:path/to/dir",
+  the rclone path used to store the repo is "remote:path/to/dir".
+  If the repository path does not start with "rclone:", it is assumed to be a local path.
+
 Exclude Patterns:
 
   Patterns that do not start with a '/' are matched against the filename only.
