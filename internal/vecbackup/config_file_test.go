@@ -24,21 +24,22 @@ func EncConfigTestHelper(t *testing.T, tmpDir, pwFile, badPwFile string, chunk_s
 	cfg := &Config{ChunkSize: chunk_size, Compress: compress}
 	_ = os.Remove(path.Join(tmpDir, CONFIG_FILE))
 	defer os.Remove(path.Join(tmpDir, CONFIG_FILE))
-	err := WriteNewConfig(pwFile, tmpDir, 200000, cfg)
+	sm, repo2 := GetStorageMgr(tmpDir)
+	err := WriteNewConfig(pwFile, sm, repo2, 200000, cfg)
 	if err != nil {
 		t.Fatal("Cannot save config:", err)
 	}
 	if pwFile != "" {
-		_, err = GetConfig("", tmpDir)
+		_, err = GetConfig("", sm, repo2)
 		if err == nil {
 			t.Fatal("Should not be able to load encrypted config without pw file")
 		}
 	}
-	_, err = GetConfig(badPwFile, tmpDir)
+	_, err = GetConfig(badPwFile, sm, repo2)
 	if err == nil {
 		t.Fatal("Should not be able to load config with bad pw file")
 	}
-	cfg2, err := GetConfig(pwFile, tmpDir)
+	cfg2, err := GetConfig(pwFile, sm, repo2)
 	if err != nil {
 		t.Fatal("Cannot load enc config", err)
 	}

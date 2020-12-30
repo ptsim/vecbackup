@@ -10,10 +10,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"io"
-	"io/ioutil"
 	"math"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -121,12 +119,13 @@ func (fd *FileData) PrettyPrint() string {
 //---------------------------------------------------------------------------
 
 type VMgr struct {
+	sm  StorageMgr
 	dir string
 	key *EncKey
 }
 
-func MakeVMgr(repo string, key *EncKey) *VMgr {
-	return &VMgr{dir: repo, key: key}
+func MakeVMgr(sm StorageMgr, repo string, key *EncKey) *VMgr {
+	return &VMgr{sm: sm, dir: sm.JoinPath(repo, VERSION_DIR), key: key}
 }
 
 func (vm *VMgr) GetLatestVersion() (string, error) {
@@ -141,19 +140,15 @@ func (vm *VMgr) GetLatestVersion() (string, error) {
 }
 
 func (vm *VMgr) GetVersions() ([]string, error) {
-	md := path.Join(vm.dir, VERSIONS_DIR)
-	files, err := ioutil.ReadDir(md)
-	if err != nil {
+	files, err := vm.sm.LsDir(vm.dir)
+	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
 	var versions []string
-	for _, f := range files {
-		n := f.Name()
-		if f.Mode().IsRegular() {
-			version, ok := DecodeVersionFileName(n)
-			if ok {
-				versions = append(versions, version)
-			}
+	for _, n := range files {
+		version, ok := DecodeVersionFileName(n)
+		if ok {
+			versions = append(versions, version)
 		}
 	}
 	sort.Strings(versions)
@@ -161,16 +156,16 @@ func (vm *VMgr) GetVersions() ([]string, error) {
 }
 
 func (vm *VMgr) DeleteVersion(v string) error {
-	fn := VERSION_FILENAME_PREFIX + v
-	p := path.Join(vm.dir, VERSIONS_DIR, fn)
-	if nodeExists(p) {
-		if err := os.Remove(p); err != nil {
-			return err
-		}
-	} else {
-		return errors.New("Does not exist")
+	f := VERSION_FILENAME_PREFIX + v
+	exists, err := vm.sm.ExistInDir(vm.dir, f)
+	if err != nil {
+		return err
 	}
-	return nil
+	if !exists {
+		return errors.New("Version does not exist")
+	}
+	p := vm.sm.JoinPath(vm.dir, f)
+	return vm.sm.DeleteFile(p)
 }
 
 func ConvertFromNodeDataProto(nd *NodeDataProto) (*FileData, error) {
@@ -297,8 +292,8 @@ func ReadNodeDataProto(r *bufio.Reader) (*NodeDataProto, error) {
 }
 
 func (vm *VMgr) LoadFiles(v string) ([]*FileData, error, int) {
-	fp := path.Join(vm.dir, VERSIONS_DIR, VERSION_FILENAME_PREFIX+v)
-	ciphertext, err := ioutil.ReadFile(fp)
+	fp := vm.sm.JoinPath(vm.dir, VERSION_FILENAME_PREFIX+v)
+	ciphertext, err := vm.sm.ReadFile(fp)
 	if err != nil {
 		return nil, err, 0
 	}
@@ -362,16 +357,12 @@ func (vm *VMgr) SaveFiles(version string, fds []*FileData) error {
 			return err
 		}
 	}
-	fp := path.Join(vm.dir, VERSIONS_DIR, VERSION_FILENAME_PREFIX+version)
-	tfp := fp + TEMP_FILE_SUFFIX
-	if err := ioutil.WriteFile(tfp, result, DEFAULT_FILE_PERM); err != nil {
-		return err
+	vm.sm.MkdirAll(vm.dir)
+	fp := vm.sm.JoinPath(vm.dir, VERSION_FILENAME_PREFIX+version)
+	if err != nil {
+		return fmt.Errorf("Cannot create repo dir: %s", err)
 	}
-	if err := os.Rename(tfp, fp); err != nil {
-		os.Remove(tfp)
-		return err
-	}
-	return nil
+	return vm.sm.WriteFile(fp, result)
 }
 
 func ReduceVersions(cur time.Time, versions []string) []string {

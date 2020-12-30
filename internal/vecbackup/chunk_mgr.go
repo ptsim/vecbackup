@@ -8,17 +8,24 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"path"
 )
 
+type ChunkMap map[FP]int
+
 type CMgr struct {
+	sm       StorageMgr
 	dir      string
 	key      *EncKey
 	compress CompressionMode
+	chunks   ChunkMap
 }
 
-func MakeCMgr(repo string, key *EncKey, compress CompressionMode) *CMgr {
-	return &CMgr{dir: path.Join(repo, CHUNK_DIR), key: key, compress: compress}
+func MakeCMgr(sm StorageMgr, repo string, key *EncKey, compress CompressionMode) (*CMgr, error) {
+	cm := &CMgr{sm: sm, dir: sm.JoinPath(repo, CHUNK_DIR), key: key, compress: compress}
+	if err := cm.scanChunks(); err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	return cm, nil
 }
 
 const DIR_PREFIX_SIZE = 2
@@ -37,17 +44,26 @@ func nameToFP(name string) (FP, error) {
 	return fp, nil
 }
 
+func (cm *CMgr) scanChunks() error {
+	cm.chunks = make(map[FP]int)
+	return cm.sm.LsDir2(cm.dir, func(d, f string) {
+		if d == f[:DIR_PREFIX_SIZE] {
+			if fp, err := nameToFP(f); err == nil {
+				cm.chunks[fp] = 0
+			}
+		}
+	})
+}
+
 func (cm *CMgr) FindChunk(fp FP) bool {
-	name := FPtoName(fp)
-	p := path.Join(cm.dir, name[:DIR_PREFIX_SIZE], name)
-	_, err := os.Stat(p)
-	return err == nil
+	_, ok := cm.chunks[fp]
+	return ok
 }
 
 func (cm *CMgr) ReadChunk(fp FP) ([]byte, error) {
 	name := FPtoName(fp)
-	f := path.Join(cm.dir, name[:DIR_PREFIX_SIZE], name)
-	ciphertext, err := ioutil.ReadFile(f)
+	f := cm.sm.JoinPath(cm.sm.JoinPath(cm.dir, name[:DIR_PREFIX_SIZE]), name)
+	ciphertext, err := cm.sm.ReadFile(f)
 	if err != nil {
 		return nil, err
 	}
@@ -80,56 +96,33 @@ func (cm *CMgr) AddChunk(fp FP, chunk []byte) (bool, int, error) {
 		}
 	}
 	name := FPtoName(fp)
-	dir := path.Join(cm.dir, name[:DIR_PREFIX_SIZE])
-	f := path.Join(dir, name)
-	tf := f + TEMP_FILE_SUFFIX
-	os.MkdirAll(dir, DEFAULT_DIR_PERM)
-	err = ioutil.WriteFile(tf, ciphertext, DEFAULT_FILE_PERM)
-	compressedLen := len(ciphertext)
-	if err == nil {
-		err = os.Rename(tf, f)
-	}
-	if err != nil {
-		os.Remove(tf)
+	dir := cm.sm.JoinPath(cm.dir, name[:DIR_PREFIX_SIZE])
+	f := cm.sm.JoinPath(dir, name)
+	if err = cm.sm.MkdirAll(dir); err != nil {
 		return false, 0, err
 	}
+	err = cm.sm.WriteFile(f, ciphertext)
+	compressedLen := len(ciphertext)
+	cm.chunks[fp] = 0
 	return false, compressedLen, nil
 }
 
-func (cm *CMgr) DeleteChunk(fp FP) bool {
+func (cm *CMgr) DeleteChunk(fp FP) error {
 	name := FPtoName(fp)
-	p := path.Join(cm.dir, name[:DIR_PREFIX_SIZE], name)
-	return os.Remove(p) == nil
-}
-
-func (cm *CMgr) getSubChunks(prefix string, items map[FP]int) error {
-	files, err := ioutil.ReadDir(path.Join(cm.dir, prefix))
-	if err != nil {
-		return err
+	p := cm.sm.JoinPath(cm.sm.JoinPath(cm.dir, name[:DIR_PREFIX_SIZE]), name)
+	err := cm.sm.DeleteFile(p)
+	if err == nil {
+		delete(cm.chunks, fp)
 	}
-	for _, f := range files {
-		name := f.Name()
-		if f.Mode().IsRegular() && prefix == name[:DIR_PREFIX_SIZE] {
-			if fp, err := nameToFP(name); err == nil {
-				items[fp] = 0
-			}
-		}
-	}
-	return nil
+	return err
 }
 
 func (cm *CMgr) GetAllChunks() map[FP]int {
-	items := make(map[FP]int)
-	files, err := ioutil.ReadDir(cm.dir)
-	if err != nil {
-		return items // TODO error
+	m := make(map[FP]int)
+	for k, v := range cm.chunks {
+		m[k] = v
 	}
-	for _, f := range files {
-		if f.IsDir() && len(f.Name()) == DIR_PREFIX_SIZE {
-			cm.getSubChunks(f.Name(), items) // TODO error
-		}
-	}
-	return items
+	return m
 }
 
 func prefixAndCompress(d []byte) ([]byte, error) {

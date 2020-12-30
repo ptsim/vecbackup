@@ -22,12 +22,12 @@ const (
 	VC_MAGIC                = "VBKC"
 	VV_VERSION              = 1
 	VV_MAGIC                = "VBKV"
-	CONFIG_FILE             = "config"
-	VERSIONS_DIR            = "versions"
+	CONFIG_FILE             = "vecbackup-config"
+	VERSION_DIR             = "versions"
+	CHUNK_DIR               = "chunks"
 	VERSION_FILENAME_PREFIX = "version-"
 	LOCK_FILENAME           = "lock"
-	TEMP_FILE_SUFFIX        = "-temp"
-	CHUNK_DIR               = "chunks"
+	RESTORE_TEMP_SUFFIX     = ".vbk.restore.temp"
 	DEFAULT_DIR_PERM        = 0700
 	DEFAULT_FILE_PERM       = 0600
 	PATH_SEP                = string(os.PathSeparator)
@@ -448,7 +448,7 @@ func restoreNode(fd *FileData, cm *CMgr, recDir string, testRun bool, merge bool
 			return nil
 		}
 	}
-	tp := p + TEMP_FILE_SUFFIX
+	tp := p + RESTORE_TEMP_SUFFIX
 	err := restoreFileToTemp(fd, cm, tp, testRun, secret)
 	if err == nil {
 		if testRun {
@@ -472,29 +472,17 @@ func restoreNode(fd *FileData, cm *CMgr, recDir string, testRun bool, merge bool
 }
 
 func setup(repo string, pwFile string) (*VMgr, *CMgr, *Config, error) {
-	cfg, err := GetConfig(pwFile, repo)
+	sm, repo2 := GetStorageMgr(repo)
+	cfg, err := GetConfig(pwFile, sm, repo2)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	vm := MakeVMgr(repo, cfg.EncryptionKey)
-	cm := MakeCMgr(repo, cfg.EncryptionKey, cfg.Compress)
-	return vm, cm, cfg, nil
-}
-
-func writeLockfile(repo string) (string, error) {
-	lfn := path.Join(repo, LOCK_FILENAME)
-	lockFile, err := os.OpenFile(lfn, os.O_WRONLY|os.O_CREATE|os.O_EXCL, DEFAULT_FILE_PERM)
-	if os.IsExist(err) {
-		return "", fmt.Errorf("Lock file %s already exist.", lfn)
-	} else if err != nil {
-		return "", err
+	vm := MakeVMgr(sm, repo2, cfg.EncryptionKey)
+	cm, err := MakeCMgr(sm, repo2, cfg.EncryptionKey, cfg.Compress)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	lockFile.Close()
-	return lfn, nil
-}
-
-func removeLockfile(lfn string) {
-	os.Remove(lfn)
+	return vm, cm, cfg, nil
 }
 
 //---------------------------------------------------------------------------
@@ -503,23 +491,17 @@ func InitRepo(pwFile, repo string, chunkSize int32, iterations int, compress Com
 	if repo == "" {
 		return errors.New("Backup repository must be specified.")
 	}
-	if nodeExists(repo) {
-		return fmt.Errorf("Backup directory already exist: %s", repo)
+	sm, repo2 := GetStorageMgr(repo)
+	files, err := sm.LsDir(repo2)
+	if !os.IsNotExist(err) && len(files) != 0 {
+		return fmt.Errorf("Backup repository already exists: %s", repo)
 	}
-	err := os.MkdirAll(repo, DEFAULT_DIR_PERM)
+	err = sm.MkdirAll(repo2)
 	if err != nil {
-		return fmt.Errorf("Cannot create backup dir: %s", err)
-	}
-	err = os.MkdirAll(path.Join(repo, VERSIONS_DIR), DEFAULT_DIR_PERM)
-	if err != nil {
-		return fmt.Errorf("Cannot create backup dir: %s", err)
-	}
-	err = os.MkdirAll(path.Join(repo, CHUNK_DIR), DEFAULT_DIR_PERM)
-	if err != nil {
-		return fmt.Errorf("Cannot create backup dir: %s", err)
+		return fmt.Errorf("Cannot create repo dir: %s", err)
 	}
 	cfg := &Config{ChunkSize: chunkSize, Compress: compress}
-	err = WriteNewConfig(pwFile, repo, iterations, cfg)
+	err = WriteNewConfig(pwFile, sm, repo2, iterations, cfg)
 	if err != nil {
 		return fmt.Errorf("Cannot write encypted config file: %s", err)
 	}
@@ -546,13 +528,29 @@ type BackupStats struct {
 	AddRepoSize     int64
 }
 
-func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose bool, srcs []string, stats *BackupStats) error {
+func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose bool, lockFile string, srcs []string, stats *BackupStats) error {
 	if repo == "" {
 		return errors.New("Backup repository must be specified.")
 	}
 	if len(srcs) == 0 {
 		return errors.New("At least one backup src must be specified")
 	}
+	var sml StorageMgr
+	var lockFile2 string
+	if lockFile == "" {
+		var repo2 string
+		sml, repo2 = GetStorageMgr(repo)
+		lockFile = sml.JoinPath(repo, LOCK_FILENAME)
+		lockFile2 = sml.JoinPath(repo2, LOCK_FILENAME)
+	} else {
+		sml, lockFile2 = GetStorageMgr(lockFile)
+	}
+	if err := sml.WriteLockFile(lockFile2); os.IsExist(err) {
+		return fmt.Errorf("Repository is locked. Lock file %s exists.", lockFile)
+	} else if err != nil {
+		return err
+	}
+	defer sml.RemoveLockFile(lockFile2)
 	vm, cm, cfg, err := setup(repo, pwFile)
 	if err != nil {
 		return err
@@ -599,11 +597,6 @@ func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose
 	comb := append(append([]string(nil), vfdm.names...), sfdm.names...)
 	sort.Strings(comb)
 	sort.Sort(byDirFile(comb))
-	lfn, err := writeLockfile(repo)
-	if err != nil {
-		return err
-	}
-	defer removeLockfile(lfn)
 	var last string
 	var fds []*FileData
 	for _, n := range comb {
@@ -645,7 +638,7 @@ func Restore(pwFile, repo, recDir, version string, merge, testRun, dryRun, verbo
 			return fmt.Errorf("Cannot read version files: %s", err)
 		}
 		if version == "" {
-			return errors.New("Backup is empty")
+			return errors.New("Error! Nothing to restore. Repository is empty")
 		}
 	}
 	fds, err, errs := vm.LoadFiles(version)
@@ -702,7 +695,7 @@ func Ls(pwFile, repo, version string) error {
 	if err != nil {
 		return fmt.Errorf("Cannot read version files: %s", err)
 	} else if version == "" {
-		return errors.New("Backup is empty")
+		return nil
 	}
 	fds, err, errs := vm.LoadFiles(version)
 	if err != nil {
@@ -911,15 +904,15 @@ func PurgeUnused(pwFile, repo string, dryRun, verbose bool) error {
 			}
 			numDeleted++
 		} else {
-			if cm.DeleteChunk(chunk) {
+			if err := cm.DeleteChunk(chunk); err != nil {
+				numFailed++
+				if verbose {
+					fmt.Fprintf(stdout, "Failed to delete %s: %s\n", chunk, err)
+				}
+			} else {
 				numDeleted++
 				if verbose {
 					fmt.Fprintf(stdout, "Deleted %s\n", chunk)
-				}
-			} else {
-				numFailed++
-				if verbose {
-					fmt.Fprintf(stdout, "Failed to delete %s\n", chunk)
 				}
 			}
 		}
@@ -933,4 +926,17 @@ func PurgeUnused(pwFile, repo string, dryRun, verbose bool) error {
 		return fmt.Errorf("Failed to purge %d chunk(s).", numFailed)
 	}
 	return nil
+}
+
+func RemoveLock(repo, lockFile string) error {
+	var sml StorageMgr
+	var lockFile2 string
+	if lockFile == "" {
+		var repo2 string
+		sml, repo2 = GetStorageMgr(repo)
+		lockFile2 = sml.JoinPath(repo2, LOCK_FILENAME)
+	} else {
+		sml, lockFile2 = GetStorageMgr(lockFile)
+	}
+	return sml.RemoveLockFile(lockFile2)
 }

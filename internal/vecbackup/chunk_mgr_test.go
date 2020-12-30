@@ -19,7 +19,11 @@ func TestCMEnc(t *testing.T) {
 func testCMhelper(t *testing.T, key *EncKey) {
 	removeAll(t, REPO)
 	defer removeAll(t, REPO)
-	cm := MakeCMgr(REPO, key, CompressionMode_YES)
+	sm, repo2 := GetStorageMgr(REPO)
+	cm, err := MakeCMgr(sm, repo2, key, CompressionMode_YES)
+	if err != nil {
+		t.Fatalf("Can't create chunk manager: %s", err)
+	}
 	N := 100000
 	data := make([]byte, N)
 	rand.Seed(1)

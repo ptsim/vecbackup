@@ -40,6 +40,7 @@ var opt struct {
 	Target      string
 	ExcludeFrom string
 	Compress    CompressionMode
+	LockFile    string
 }
 
 func setupTest(t testing.TB, name string) func() {
@@ -56,6 +57,7 @@ func setupTest(t testing.TB, name string) func() {
 	opt.Target = RESDIR
 	opt.ExcludeFrom = ""
 	opt.Compress = CompressionMode_AUTO
+	opt.LockFile = ""
 	stdout = ioutil.Discard
 	stderr = os.Stderr
 	debug = *debugFlag
@@ -152,7 +154,7 @@ func (e *TestEnv) backup() {
 	e.failIfError("Getwd", err)
 	e.failIfError("Chdir to srcdir", os.Chdir(SRCDIR))
 	stats := &BackupStats{}
-	e.failIfError("backup", Backup(opt.PwFile, opt.Repo, opt.ExcludeFrom, opt.Version, opt.DryRun, opt.Force, opt.Verbose, []string{"."}, stats))
+	e.failIfError("backup", Backup(opt.PwFile, opt.Repo, opt.ExcludeFrom, opt.Version, opt.DryRun, opt.Force, opt.Verbose, opt.LockFile, []string{"."}, stats))
 	e.failIfError("Chdir to test dir", os.Chdir(wk))
 }
 
@@ -161,7 +163,7 @@ func (e *TestEnv) backupSrcs(srcs []string) {
 	e.failIfError("Getwd", err)
 	e.failIfError("Chdir to srcdir", os.Chdir(SRCDIR))
 	stats := &BackupStats{}
-	e.failIfError("backup", Backup(opt.PwFile, opt.Repo, opt.ExcludeFrom, opt.Version, opt.DryRun, opt.Force, opt.Verbose, srcs, stats))
+	e.failIfError("backup", Backup(opt.PwFile, opt.Repo, opt.ExcludeFrom, opt.Version, opt.DryRun, opt.Force, opt.Verbose, opt.LockFile, srcs, stats))
 	e.failIfError("Chdir to test dir", os.Chdir(wk))
 }
 

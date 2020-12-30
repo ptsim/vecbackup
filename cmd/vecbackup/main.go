@@ -13,15 +13,16 @@ import (
 func usageAndExit() {
 	fmt.Fprintf(os.Stderr, `Usage:
   vecbackup help
-  vecbackup init [-pw <pwfile>] [-chunk-size size] [-pbkdf2-iterations num] -r <backupdir>
-  vecbackup backup [-v] [-f] [-n] [-version <version>] [-pw <pwfile>] [-exclude-from <file>] -r <backupdir> <src> [<src> ...]
-  vecbackup ls [-version <version>] [-pw <pwfile>] -r <backupdir>
-  vecbackup versions [-pw <pwfile>] -r <backupdir>
-  vecbackup restore [-v] [-n] [-verify-only] [-version <version>] [-merge] [-pw <pwfile>] -r <backupdir> -target <restoredir> [<path> ...]
-  vecbackup delete-version [-pw <pwfile>] -r <backupdir> -version <version>
-  vecbackup delete-old-versions [-n] [-pw <pwfile>] -r <backupdir>
-  vecbackup verify-repo [-pw <pwfile>] [-quick] -r <backupdir>
-  vecbackup purge-unused [-v] [-pw <pwfile>] [-n] -r <backupdir>
+  vecbackup init [-pw <pwfile>] [-chunk-size size] [-pbkdf2-iterations num] -r <repo>
+  vecbackup backup [-v] [-f] [-n] [-version <version>] [-pw <pwfile>] [-exclude-from <file>] -r <repo> <src> [<src> ...]
+  vecbackup ls [-version <version>] [-pw <pwfile>] -r <repo>
+  vecbackup versions [-pw <pwfile>] -r <repo>
+  vecbackup restore [-v] [-n] [-verify-only] [-version <version>] [-merge] [-pw <pwfile>] -r <repo> -target <restoredir> [<path> ...]
+  vecbackup delete-version [-pw <pwfile>] -r <repo> -version <version>
+  vecbackup delete-old-versions [-n] [-pw <pwfile>] -r <repo>
+  vecbackup verify-repo [-pw <pwfile>] [-quick] -r <repo>
+  vecbackup purge-unused [-v] [-pw <pwfile>] [-n] -r <repo>
+  vecbackup remove-lock [-r <repo>] [-lock-file <file>]
 `)
 	os.Exit(1)
 }
@@ -29,7 +30,7 @@ func usageAndExit() {
 func help() {
 	fmt.Printf(`Usage:
   vecbackup help
-  vecbackup init [-pw <pwfile>] [-chunk-size size] [-pbkdf2-iterations num] [-compress mode] -r <backupdir>
+  vecbackup init [-pw <pwfile>] [-chunk-size size] [-pbkdf2-iterations num] [-compress mode] -r <repo>
       -chunk-size   files are broken into chunks of this size.
       -pbkdf2-iterations
                     number of iterations for PBKDF2 key generation.
@@ -45,27 +46,28 @@ func help() {
 
     Initialize a new backup repository.
 
-  vecbackup backup [-v] [-f] [-n] [-version <version>] [-pw <pwfile>] [-exclude-from <file>] -r <backupdir> <src> [<src> ...]
-    Incrementally and recursively backs up one or more <src> to <backupdir>
+  vecbackup backup [-v] [-f] [-n] [-version <version>] [-pw <pwfile>] [-exclude-from <file>] [-lock-file <file>] -r <repo> <src> [<src> ...]
+    Incrementally and recursively backs up one or more <src> to <repo>.
     The files, directories and symbolic links backed up. Other file types are silently ignored.
-    Prints the items that are added (+), removed (-) from or updated (*).
-    Files that have not changed in same size and timestamp are not backed up
+    Files that have not changed in same size and timestamp are not backed up.
+    A lock file is created to prevent concurrent backups and removed when done.
     again.
-      -v            verbose, prints the names of all items backed up
+      -v            verbose, prints the items that are added (+), removed (-) or updated (*).
       -f            force, always check file contents 
       -n            dry run, show what would have been backed up
       -version      save as the given version, instead of the current time
       -exclude-from reads list of exclude patterns from specified file
+      -lock-file    path to lock file if different from default (<repo>/lock)
 
-  vecbackup versions [-pw <pwfile>] -r <backupdir>
+  vecbackup versions [-pw <pwfile>] -r <repo>
     Lists all backup versions in chronological order. The version name is a
     timestamp in UTC formatted with RFC3339Nano format (YYYY-MM-DDThh:mm:ssZ).
 
-  vecbackup ls [-version <version>] [-pw <pwfile>] -r <backupdir>
-    Lists files in <backupdir>.
+  vecbackup ls [-version <version>] [-pw <pwfile>] -r <repo>
+    Lists files in <repo>.
     -version <version>   list the files in that version
 
-  vecbackup restore [-v] [-n] [-version <version>] [-merge] [-pw <pwfile>] [-verify-only] -r <backupdir> -target <restoredir> [<path> ...]
+  vecbackup restore [-v] [-n] [-version <version>] [-merge] [-pw <pwfile>] [-verify-only] -r <repo> -target <restoredir> [<path> ...]
     Restores all the items or the given <path>s to <restoredir>.
       -v            verbose, prints the names of all items restored
       -n            dry run, show what would have been restored
@@ -79,29 +81,35 @@ func help() {
       -target <restoredir>
                     target dir for the restore. It must not already exist unless -merge is specified.
 
-  vecbackup delete-version [-pw <pwfile>] -r <backupdir> -verson <version>
+  vecbackup delete-version [-pw <pwfile>] -r <repo> -verson <version>
     Deletes the given version. No chunks are deleted.
 
-  vecbackup delete-old-versions [-n] [-pw <pwfile>] -r <backupdir>
+  vecbackup delete-old-versions [-n] [-pw <pwfile>] -r <repo>
     Deletes old versions. No chunks are deleted.
     Keeps all versions within one day, one version per hour for the last week,
     one version per day in the last month, one version per week in the last 
     year and one version per month otherwise.
       -n            dry run, show versions that would have been deleted
 
-  vecbackup verify-repo [-pw <pwfile>] -r <backupdir>
+  vecbackup verify-repo [-pw <pwfile>] -r <repo>
     Verifies that all the chunks used by all the files in all versions
     can be read and match their checksums.
       -quick        Quick, just check that the chunks exist.
 
-  vecbackup purge-unused [-pw <pwfile>] [-n] -r <backupdir>
+  vecbackup purge-unused [-pw <pwfile>] [-n] -r <repo>
     Deletes chunks that are not used by any file in any backup version.
       -n            dry run, show number of chunks to be deleted.
       -v            print the chunks being deleted
 
+  vecbackup remove-lock [-lock-file <file>] [-r repo]
+      -lock-file    path to lock file if different from default (<repo>/lock)
+    Removes the lock file left behind due to a failed backup operation.
+    Either -r or -lock-file must be specified.
+
 Common flags:
       -r            Path to backup repository.
       -pw           file containing the password
+      -rclone-binary  Path to the "rclone" program
 
 Exclude Patterns:
 
@@ -132,6 +140,8 @@ var target = flag.String("target", "", "Path to restore target path.")
 var excludeFrom = flag.String("exclude-from", "", "Reads list of exclude patterns from specified file.")
 var compress = flag.String("compress", "auto", "Compression mode")
 var quick = flag.Bool("quick", false, "Quick mode")
+var rclone = flag.String("rclone-binary", "rclone", "Path to rclone binary")
+var lockFile = flag.String("lock-file", "", "Lock file path")
 
 func exitIfError(err error) {
 	if err != nil {
@@ -169,17 +179,18 @@ func main() {
 			f.Close()
 		}()
 	}
+	vecbackup.SetRcloneBinary(*rclone)
 	if cmd == "help" {
 		help()
 	} else if cmd == "backup" {
 		var stats vecbackup.BackupStats
-		exitIfError(vecbackup.Backup(*pwFile, *repo, *excludeFrom, *version, *dryRun, *force, *verbose, flag.Args(), &stats))
+		exitIfError(vecbackup.Backup(*pwFile, *repo, *excludeFrom, *version, *dryRun, *force, *verbose, *lockFile, flag.Args(), &stats))
 		if *dryRun {
 			fmt.Printf("Backup dry run\n%d dir(s) (%d new %d updated %d removed)\n%d file(s) (%d new %d updated %d removed)\n%d symlink(s) (%d new %d updated %d removed)\ntotal src size %d\n%d error(s).\n", stats.Dirs, stats.DirsNew, stats.DirsUpdated, stats.DirsRemoved, stats.Files, stats.FilesNew, stats.FilesUpdated, stats.FilesRemoved, stats.Symlinks, stats.SymlinksNew, stats.SymlinksUpdated, stats.SymlinksRemoved, stats.Size, stats.Errors)
 		} else {
 			savingsPct := float64(0)
 			if stats.AddSrcSize > 0 {
-				savingsPct = float64(stats.AddSrcSize - stats.AddRepoSize) * 100 / float64(stats.AddSrcSize)
+				savingsPct = float64(stats.AddSrcSize-stats.AddRepoSize) * 100 / float64(stats.AddSrcSize)
 			}
 			fmt.Printf("Backup version %s\n%d dir(s) (%d new %d updated %d removed)\n%d file(s) (%d new %d updated %d removed)\n%d symlink(s) (%d new %d updated %d removed)\ntotal src size %d, added %d, actual added repo size %d (savings %0.1f%%)\n%d error(s).\n", stats.Version, stats.Dirs, stats.DirsNew, stats.DirsUpdated, stats.DirsRemoved, stats.Files, stats.FilesNew, stats.FilesUpdated, stats.FilesRemoved, stats.Symlinks, stats.SymlinksNew, stats.SymlinksUpdated, stats.SymlinksRemoved, stats.Size, stats.AddSrcSize, stats.AddRepoSize, savingsPct, stats.Errors)
 		}
@@ -223,6 +234,11 @@ func main() {
 		exitIfError(vecbackup.VerifyRepo(*pwFile, *repo, *quick, &r))
 	} else if cmd == "purge-unused" {
 		exitIfError(vecbackup.PurgeUnused(*pwFile, *repo, *dryRun, *verbose))
+	} else if cmd == "remove-lock" {
+		if *repo == "" && *lockFile == "" {
+			exitIfError(errors.New("Either -r or -lock-file must be specified."))
+		}
+		exitIfError(vecbackup.RemoveLock(*repo, *lockFile))
 	} else {
 		usageAndExit()
 	}

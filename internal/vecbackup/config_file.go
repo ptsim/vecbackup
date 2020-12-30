@@ -7,8 +7,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"io"
 	"io/ioutil"
-	"os"
-	"path"
 )
 
 type Config struct {
@@ -63,56 +61,31 @@ func configFromBytes(b []byte, encrypted bool) (*Config, error) {
 	return cfg, nil
 }
 
-func readEncConfig(fp string) (*EncConfigProto, error) {
-	in, err := os.Open(fp)
-	if err != nil {
-		return nil, err
-	}
-	defer in.Close()
-	ec := EncConfigProto{}
-	var h [len(VC_MAGIC)]byte
-	if _, err := io.ReadFull(in, h[:]); err != nil || bytes.Compare(h[:], []byte(VC_MAGIC)) != 0 {
-		return nil, errors.New("Invalid config file")
-	}
-	if b, err := ioutil.ReadAll(in); err != nil {
-		return nil, err
-	} else {
-		if err := proto.Unmarshal(b, &ec); err != nil {
-			return nil, err
-		}
-	}
-	if ec.Version != VC_VERSION {
-		return nil, errors.New("Incompatible config file.")
-	}
-	return &ec, nil
-}
-
-func writeEncConfig(fp string, t EncType, iterations int64, salt, config []byte) error {
+func writeEncConfig(sm StorageMgr, d, p string, t EncType, iterations int64, salt, config []byte) error {
 	ec := EncConfigProto{Version: VC_VERSION, Type: t, Iterations: iterations, Salt: salt, Config: config}
 	pb, err := proto.Marshal(&ec)
 	if err != nil {
 		return err
 	}
-	_, err = os.Stat(fp)
-	if !os.IsNotExist(err) {
-		return fmt.Errorf("Enc config file already exists: %s", fp)
-	}
-	out, err := os.Create(fp)
-	if err != nil {
+	if exists, err := sm.ExistInDir(d, p); exists {
+		return fmt.Errorf("Config file already exists in repo: %s", d)
+	} else if err != nil {
 		return err
 	}
-	out.Write([]byte(VC_MAGIC))
-	out.Write(pb)
-	return out.Close()
+	fp := sm.JoinPath(d, p)
+	var buf bytes.Buffer
+	buf.Write([]byte(VC_MAGIC))
+	buf.Write(pb)
+	return sm.WriteFile(fp, buf.Bytes())
 }
 
-func WriteNewConfig(pwFile, repo string, rounds int, cfg *Config) error {
+func WriteNewConfig(pwFile string, sm StorageMgr, repo string, rounds int, cfg *Config) error {
 	if pwFile == "" {
 		configBytes, err := configToBytes(cfg, false)
 		if err != nil {
 			return err
 		}
-		return writeEncConfig(path.Join(repo, CONFIG_FILE), EncType_NO_ENCRYPTION, 0, nil, configBytes)
+		return writeEncConfig(sm, repo, CONFIG_FILE, EncType_NO_ENCRYPTION, 0, nil, configBytes)
 	}
 	pw, err := ioutil.ReadFile(pwFile)
 	if err != nil {
@@ -132,11 +105,35 @@ func WriteNewConfig(pwFile, repo string, rounds int, cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	return writeEncConfig(path.Join(repo, CONFIG_FILE), EncType_SYMMETRIC, int64(rounds), salt, enc)
+	return writeEncConfig(sm, repo, CONFIG_FILE, EncType_SYMMETRIC, int64(rounds), salt, enc)
 }
 
-func GetConfig(pwFile, repo string) (*Config, error) {
-	ec, err := readEncConfig(path.Join(repo, CONFIG_FILE))
+func decodeConfig(data []byte) (*EncConfigProto, error) {
+	var in = bytes.NewBuffer(data)
+	ec := EncConfigProto{}
+	var h [len(VC_MAGIC)]byte
+	if _, err := io.ReadFull(in, h[:]); err != nil || bytes.Compare(h[:], []byte(VC_MAGIC)) != 0 {
+		return nil, errors.New("Invalid config file")
+	}
+	if b, err := ioutil.ReadAll(in); err != nil {
+		return nil, err
+	} else {
+		if err := proto.Unmarshal(b, &ec); err != nil {
+			return nil, err
+		}
+	}
+	if ec.Version != VC_VERSION {
+		return nil, errors.New("Incompatible config file.")
+	}
+	return &ec, nil
+}
+
+func GetConfig(pwFile string, sm StorageMgr, repo string) (*Config, error) {
+	b, err := sm.ReadFile(sm.JoinPath(repo, CONFIG_FILE))
+	if err != nil {
+		return nil, err
+	}
+	ec, err := decodeConfig(b)
 	if err != nil {
 		return nil, fmt.Errorf("Invalid repository: %s", err)
 	}
