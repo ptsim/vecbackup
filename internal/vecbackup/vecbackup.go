@@ -438,6 +438,25 @@ func restoreNode(fd *FileData, cm *CMgr, recDir string, testRun bool, merge bool
 		return nil
 	}
 	if fd.IsSymlink() {
+		if merge {
+			fi, err := os.Lstat(p)
+			if !os.IsNotExist(err) {
+				if err != nil {
+					return err
+				}
+				if !isSymlink(fi) {
+					return errors.New("Cannot restore symlink. File/dir already exist at the path.")
+				}
+				target, err := os.Readlink(p)
+				if err != nil {
+					return err
+				}
+				if target != fd.Target {
+					return errors.New("Cannot restore symlink. Existing symlink points to wrong target.")
+				}
+				return nil
+			}
+		}
 		if !testRun {
 			return os.Symlink(fd.Target, p)
 		}
@@ -651,7 +670,7 @@ func Restore(pwFile, repo, recDir, version string, merge, testRun, dryRun, verbo
 	for _, fd := range fds {
 		if matchRestorePatterns(fd.Name, patterns) {
 			if !dryRun {
-				restoreNode(fd, cm, recDir, testRun, merge, cfg.FPSecret)
+				err = restoreNode(fd, cm, recDir, testRun, merge, cfg.FPSecret)
 			}
 			if err == nil {
 				if verbose {
