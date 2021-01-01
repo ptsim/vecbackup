@@ -426,8 +426,8 @@ func restoreFileToTemp(fd *FileData, cm *CMgr, fn string, testRun bool, secret [
 	return nil
 }
 
-func restoreNode(fd *FileData, cm *CMgr, recDir string, testRun bool, merge bool, secret []byte) error {
-	p := path.Join(recDir, fd.Name)
+func restoreNode(fd *FileData, cm *CMgr, resDir string, testRun bool, merge bool, secret []byte) error {
+	p := path.Join(resDir, fd.Name)
 	if fd.IsDir() {
 		if !testRun {
 			if err := os.MkdirAll(p, DEFAULT_DIR_PERM); err != nil && !os.IsExist(err) {
@@ -637,19 +637,19 @@ func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose
 	return nil
 }
 
-func Restore(pwFile, repo, recDir, version string, merge, testRun, dryRun, verbose bool, patterns []string) error {
+func Restore(pwFile, repo, resDir, version string, merge, testRun, dryRun, verbose bool, patterns []string) error {
 	if repo == "" {
 		return errors.New("Backup repository must be specified.")
 	}
-	if recDir == "" && !testRun && !dryRun {
+	if resDir == "" && !testRun && !dryRun {
 		return errors.New("Target must be specified.")
 	}
 	vm, cm, cfg, err := setup(repo, pwFile)
 	if err != nil {
 		return err
 	}
-	if nodeExists(recDir) && !merge {
-		return fmt.Errorf("Restore dir %s already exists", recDir)
+	if nodeExists(resDir) && !merge {
+		return fmt.Errorf("Restore dir %s already exists", resDir)
 	}
 	if version == "" {
 		version, err = vm.GetLatestVersion()
@@ -665,12 +665,12 @@ func Restore(pwFile, repo, recDir, version string, merge, testRun, dryRun, verbo
 		return fmt.Errorf("Cannot read version file: %s", err)
 	}
 	if !testRun && !dryRun {
-		os.MkdirAll(recDir, DEFAULT_DIR_PERM)
+		os.MkdirAll(resDir, DEFAULT_DIR_PERM)
 	}
 	for _, fd := range fds {
 		if matchRestorePatterns(fd.Name, patterns) {
 			if !dryRun {
-				err = restoreNode(fd, cm, recDir, testRun, merge, cfg.FPSecret)
+				err = restoreNode(fd, cm, resDir, testRun, merge, cfg.FPSecret)
 			}
 			if err == nil {
 				if verbose {
@@ -686,7 +686,7 @@ func Restore(pwFile, repo, recDir, version string, merge, testRun, dryRun, verbo
 		fd := fds[i]
 		if matchRestorePatterns(fd.Name, patterns) {
 			if !dryRun && !testRun && fd.IsDir() {
-				err = os.Chmod(path.Join(recDir, fd.Name), fd.Perm)
+				err = os.Chmod(path.Join(resDir, fd.Name), fd.Perm)
 				if err != nil {
 					fmt.Fprintf(stderr, "F %s: %s\n", fd.PrettyPrint(), err)
 					errs++
