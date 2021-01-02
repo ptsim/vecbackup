@@ -52,9 +52,9 @@ func help() {
     Files that have not changed in same size and timestamp are not backed up.
     A lock file is created to prevent concurrent backups and removed when done.
     again.
-      -v            verbose, prints the items that are added (+), removed (-) or updated (*).
+      -v            verbose, prints the items that are added (+) or removed (-).
       -f            force, always check file contents 
-      -n            dry run, show what would have been backed up
+      -n            dry run, shows what would have been backed up.
       -version      save as the given version, instead of the current time
       -exclude-from reads list of exclude patterns from specified file
       -lock-file    path to lock file if different from default (<repo>/lock)
@@ -70,16 +70,18 @@ func help() {
   vecbackup restore [-v] [-n] [-version <version>] [-merge] [-pw <pwfile>] [-verify-only] -r <repo> -target <restoredir> [<path> ...]
     Restores all the items or the given <path>s to <restoredir>.
       -v            verbose, prints the names of all items restored
-      -n            dry run, show what would have been restored
+      -n            dry run, shows what would have been restored.
       -version <version>
                     restore that given version or that latest version if not specified.
       -merge        merge the restored files into the given target
                     if it already exists. Files of the same size and timestamp
                     are not extracted again. This can be used to resume
                     a previous restore operation.
-      -verify-only  verify that restore can be done but do not write the files to target.
+      -verify-only  reconstruct the files by the reading chunks and verifying the checksums but do not 
+                    write them out. -target is not needed. 
       -target <restoredir>
                     target dir for the restore. It must not already exist unless -merge is specified.
+                    The target dir must specified except if -verify-only is specified.
 
   vecbackup delete-version [-pw <pwfile>] -r <repo> -verson <version>
     Deletes the given version. No chunks are deleted.
@@ -89,17 +91,17 @@ func help() {
     Keeps all versions within one day, one version per hour for the last week,
     one version per day in the last month, one version per week in the last 
     year and one version per month otherwise.
-      -n            dry run, show versions that would have been deleted
+      -n            dry run, shows versions that would have been deleted
 
   vecbackup verify-repo [-pw <pwfile>] -r <repo>
     Verifies that all the chunks used by all the files in all versions
     can be read and match their checksums.
-      -quick        Quick, just check that the chunks exist.
+      -quick        Quick, just checks that the chunks exist.
 
   vecbackup purge-unused [-pw <pwfile>] [-n] -r <repo>
     Deletes chunks that are not used by any file in any backup version.
-      -n            dry run, show number of chunks to be deleted.
-      -v            print the chunks being deleted
+      -n            dry run, shows number of chunks to be deleted.
+      -v            prints the chunks being deleted
 
   vecbackup remove-lock [-lock-file <file>] [-r repo]
       -lock-file    path to lock file if different from default (<repo>/lock)
@@ -135,7 +137,7 @@ var memprofile = flag.String("memprofile", "", "write memory profile to file")
 var verbose = flag.Bool("v", false, "Verbose")
 var force = flag.Bool("f", false, "Force. Always check file contents.")
 var dryRun = flag.Bool("n", false, "Dry run.")
-var testRun = flag.Bool("verify-only", false, "Verify but don't write.")
+var verifyOnly = flag.Bool("verify-only", false, "Verify but don't write.")
 var version = flag.String("version", "", "The version to operate on.")
 var merge = flag.Bool("merge", false, "Merge into existing directory.")
 var pwFile = flag.String("pw", "", "File containing password.")
@@ -204,7 +206,7 @@ func main() {
 			exitIfError(errors.New(fmt.Sprintf("%d errors encountered. Some data were not backed up.", stats.Errors)))
 		}
 	} else if cmd == "restore" {
-		exitIfError(vecbackup.Restore(*pwFile, *repo, *target, *version, *merge, *testRun, *dryRun, *verbose, flag.Args()))
+		exitIfError(vecbackup.Restore(*pwFile, *repo, *target, *version, *merge, *verifyOnly, *dryRun, *verbose, flag.Args()))
 	} else if flag.NArg() > 0 {
 		usageAndExit()
 	} else if cmd == "init" {

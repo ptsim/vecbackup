@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -30,7 +31,7 @@ var opt struct {
 	Verbose     bool
 	Force       bool
 	DryRun      bool
-	TestRun     bool
+	VerifyOnly  bool
 	Version     string
 	Merge       bool
 	PwFile      string
@@ -47,7 +48,7 @@ func setupTest(t testing.TB, name string) func() {
 	opt.Verbose = false
 	opt.Force = false
 	opt.DryRun = false
-	opt.TestRun = false
+	opt.VerifyOnly = false
 	opt.Version = ""
 	opt.Merge = false
 	opt.PwFile = ""
@@ -170,7 +171,7 @@ func (e *TestEnv) backupSrcs(srcs []string) {
 func (e *TestEnv) restore() []string {
 	var b bytes.Buffer
 	stdout = &b
-	e.failIfError("restore", Restore(opt.PwFile, opt.Repo, opt.Target, opt.Version, opt.Merge, opt.TestRun, opt.DryRun, opt.Verbose, nil))
+	e.failIfError("restore", Restore(opt.PwFile, opt.Repo, opt.Target, opt.Version, opt.Merge, opt.VerifyOnly, opt.DryRun, opt.Verbose, nil))
 	r := strings.Split(b.String(), "\n")
 	return r[:len(r)-1]
 }
@@ -178,7 +179,7 @@ func (e *TestEnv) restore() []string {
 func (e *TestEnv) restoreFiles(patterns []string) []string {
 	var b bytes.Buffer
 	stdout = &b
-	e.failIfError("restore", Restore(opt.PwFile, opt.Repo, opt.Target, opt.Version, opt.Merge, opt.TestRun, opt.DryRun, opt.Verbose, patterns))
+	e.failIfError("restore", Restore(opt.PwFile, opt.Repo, opt.Target, opt.Version, opt.Merge, opt.VerifyOnly, opt.DryRun, opt.Verbose, patterns))
 	r := strings.Split(b.String(), "\n")
 	return r[:len(r)-1]
 }
@@ -294,6 +295,7 @@ func (e *TestEnv) ls(version string) []string {
 
 func (e *TestEnv) filesMatch(version string, l []string) {
 	l2 := e.ls(version)
+	sort.Strings(l2)
 	ok := true
 	if len(l) == len(l2) {
 		for i, f := range l {
@@ -776,7 +778,7 @@ func TestT08(t *testing.T) {
 		e.checkExistFile("e/f")
 		e.checkNotExist("e g/f")
 		e.backupSrcs([]string{"."})
-		e.filesMatch("", []string{"./", "a", "b", "c/", "c/d", "e/", "e/f", "e g/", "e g/f"})
+		e.filesMatch("", []string{"./", "a", "b", "c/", "c/d", "e g/", "e g/f", "e/", "e/f"})
 		e.clean("res")
 		e.restore()
 		e.checkExistFile("a")
@@ -879,24 +881,31 @@ func TestT13(t *testing.T) {
 	doTestSeq(t, "T13 restore -n and -t", func(e *TestEnv) {
 		e.setPW([]byte("o9nohsfhjsdg89(*&^ih"))
 		e.init()
-		for i := 0; i < 20; i++ {
+		for i := 0; i < 5; i++ {
 			fs := 1 << uint(i)
 			e.addFile(fmt.Sprintf("a%d", fs), fs, i)
 			e.addFile(fmt.Sprintf("b%d", fs), fs+1, i)
-			e.addFile(fmt.Sprintf("c%d", fs), fs-1, i)
+			e.addFile(fmt.Sprintf("zz/c%d", fs), fs-1, i)
+			e.addSymlink(fmt.Sprintf("d%d", fs), fmt.Sprintf("aaa%d", fs))
+			e.addDir(fmt.Sprintf("e%d", fs))
 		}
 		e.backup()
+		t.Logf("dryrun=true, verifyonly=true\n")
 		opt.DryRun = true
 		opt.Verbose = true
 		files := e.restore()
+		sort.Strings(files)
 		e.checkNotExist("")
 		e.filesMatch("", files)
+		t.Logf("dryrun=false, verifyonly=run\n")
 		opt.DryRun = false
-		opt.TestRun = true
+		opt.VerifyOnly = true
 		files = e.restore()
+		sort.Strings(files)
 		e.checkNotExist("")
 		e.filesMatch("", files)
-		opt.TestRun = false
+		t.Logf("dryrun=false, verifyonly=run\n")
+		opt.VerifyOnly = false
 		e.restore()
 		e.checkSame()
 	})
@@ -1244,6 +1253,7 @@ func TestT22(t *testing.T) {
 			randomizeFiles(e, nodes)
 			e.backup()
 			vf[iter] = e.ls("")
+			sort.Strings(vf[iter])
 			e.clean("res")
 			e.restore()
 			e.checkSame()
@@ -1253,9 +1263,10 @@ func TestT22(t *testing.T) {
 			e.clean("res")
 			opt.Version = versions[iter]
 			opt.Verbose = true
-			rf := e.restore()
-			if !reflect.DeepEqual(vf[iter], rf) {
-				e.t.Fatalf("Not equal, iter %d: %v\n%v", iter, vf[iter], rf)
+			resFiles := e.restore()
+			sort.Strings(resFiles)
+			if !reflect.DeepEqual(vf[iter], resFiles) {
+				e.t.Fatalf("Not equal, iter %d: %v\n%v", iter, vf[iter], resFiles)
 			}
 		}
 		r := e.verifyRepo()
@@ -1394,36 +1405,6 @@ func BenchmarkBR50k(b *testing.B) {
 
 func BenchmarkBR100k(b *testing.B) {
 	benchmarkBR(100000, b)
-}
-
-func TestPathCompare(t *testing.T) {
-	cases := []struct {
-		path1, path2 string
-		want         int
-	}{
-		{"", "", 0},
-		{"a", "a", 0},
-		{"a/b", "a/b", 0},
-		{"a/b", "c", -1},
-		{"a/b", "c/d", -1},
-		{"a", "a/b", -1},
-		{"a", "a/b/c", -1},
-		{"a", "a b/b/c", -1},
-		{"a/b", "a b/b", -1},
-		{"a b/b", "a b/c", -1},
-		{"d/e", "de", -1},
-		{"d", "d.", -1},
-	}
-	for _, c := range cases {
-		got := pathCompare(c.path1, c.path2)
-		if got != c.want {
-			t.Errorf("pathCompare(%s, %s) == %v, want %v", c.path1, c.path2, got, c.want)
-		}
-		got = pathCompare(c.path2, c.path1)
-		if got != -c.want {
-			t.Errorf("pathCompare(%s, %s) == %v, want %v", c.path2, c.path1, got, -c.want)
-		}
-	}
 }
 
 func TestMatchRestorePattern(t *testing.T) {

@@ -13,7 +13,6 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 )
 
@@ -90,43 +89,6 @@ func toExclude(excludePatterns []string, dir, fn string) bool {
 
 func isSymlink(f os.FileInfo) bool {
 	return f.Mode()&os.ModeSymlink != 0
-}
-
-func pathCompare(p1, p2 string) int {
-	l1 := strings.Split(p1, PATH_SEP)
-	n1 := len(l1)
-	l2 := strings.Split(p2, PATH_SEP)
-	n2 := len(l2)
-	for i := 0; ; i++ {
-		if i < n1 && i < n2 {
-			if r := strings.Compare(l1[i], l2[i]); r != 0 {
-				return r
-			}
-		} else if i == n1 && i == n2 {
-			return 0
-		} else if n1 < n2 {
-			return -1
-		} else {
-			return 1
-		}
-	}
-}
-
-type byDirFile []string
-
-func (s byDirFile) Len() int {
-	return len(s)
-}
-func (s byDirFile) Swap(i, j int) {
-	s[i], s[j] = s[j], s[i]
-}
-func (s byDirFile) Less(i, j int) bool {
-	return pathCompare(s[i], s[j]) < 0
-}
-
-func nodeExists(p string) bool {
-	_, err := os.Lstat(p)
-	return !os.IsNotExist(err)
 }
 
 type fileDataMap struct {
@@ -383,9 +345,9 @@ func matchRestorePattern(p, pat string) bool {
 	return l == 0 || (len(p) > l && p[:l] == pat && os.IsPathSeparator(p[l]))
 }
 
-func restoreFileToTemp(fd *FileData, cm *CMgr, fn string, testRun bool, secret []byte) error {
+func restoreFileToTemp(fd *FileData, cm *CMgr, fn string, verifyOnly bool, secret []byte) error {
 	var f *os.File
-	if !testRun {
+	if !verifyOnly {
 		d := filepath.Dir(fn)
 		err := os.MkdirAll(d, DEFAULT_DIR_PERM)
 		f, err = os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, DEFAULT_FILE_PERM)
@@ -410,7 +372,7 @@ func restoreFileToTemp(fd *FileData, cm *CMgr, fn string, testRun bool, secret [
 		}
 		h.Write(b)
 		l += int64(len(b))
-		if !testRun {
+		if !verifyOnly {
 			_, err = f.Write(b)
 			if err != nil {
 				return err
@@ -426,52 +388,67 @@ func restoreFileToTemp(fd *FileData, cm *CMgr, fn string, testRun bool, secret [
 	return nil
 }
 
-func restoreNode(fd *FileData, cm *CMgr, resDir string, testRun bool, merge bool, secret []byte) error {
+func restoreDir(fd *FileData, resDir string, dryRun bool) (bool, error) {
 	p := path.Join(resDir, fd.Name)
-	if fd.IsDir() {
-		if !testRun {
-			if err := os.MkdirAll(p, DEFAULT_DIR_PERM); err != nil && !os.IsExist(err) {
-				return err
-			}
-			return os.Chmod(p, fd.Perm|0700)
+	fi, err := os.Lstat(p)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return false, err
 		}
-		return nil
+		if dryRun {
+			return true, nil
+		}
+		return true, os.MkdirAll(p, DEFAULT_DIR_PERM)
 	}
-	if fd.IsSymlink() {
-		if merge {
-			fi, err := os.Lstat(p)
-			if !os.IsNotExist(err) {
-				if err != nil {
-					return err
-				}
-				if !isSymlink(fi) {
-					return errors.New("Cannot restore symlink. File/dir already exist at the path.")
-				}
-				target, err := os.Readlink(p)
-				if err != nil {
-					return err
-				}
-				if target != fd.Target {
-					return errors.New("Cannot restore symlink. Existing symlink points to wrong target.")
-				}
-				return nil
-			}
-		}
-		if !testRun {
-			return os.Symlink(fd.Target, p)
-		}
-		return nil
+	if !fi.IsDir() {
+		return false, errors.New("Cannot dir. File/symlink already exist at the path.")
 	}
+	if (fi.Mode() & 0300) != 0300 {
+		return false, errors.New("Directory is not writable.")
+	}
+	return false, nil
+}
+
+func restoreSymlink(fd *FileData, resDir string, dryRun bool) (bool, error) {
+	p := path.Join(resDir, fd.Name)
+	fi, err := os.Lstat(p)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return false, err
+		}
+		if dryRun {
+			return true, nil
+		}
+		return true, os.Symlink(fd.Target, p)
+	}
+	if !isSymlink(fi) {
+		return false, errors.New("Cannot restore symlink. File/dir already exist at the path.")
+	}
+	target, err := os.Readlink(p)
+	if err != nil {
+		return false, err
+	}
+	if target != fd.Target {
+		return false, errors.New("Cannot restore symlink. Existing symlink points to wrong target.")
+	}
+	return false, nil
+}
+
+func restoreFile(fd *FileData, cm *CMgr, resDir string, merge, verifyOnly, dryRun bool, secret []byte) (bool, error) {
+	p := path.Join(resDir, fd.Name)
 	if merge {
 		if fi, err := os.Lstat(p); err == nil && fi.Size() == fd.Size && fi.ModTime().Equal(fd.ModTime) {
-			return nil
+			return false, nil
 		}
 	}
+	if dryRun {
+		return true, nil
+	}
 	tp := p + RESTORE_TEMP_SUFFIX
-	err := restoreFileToTemp(fd, cm, tp, testRun, secret)
+	err := restoreFileToTemp(fd, cm, tp, verifyOnly, secret)
 	if err == nil {
-		if testRun {
-			return nil
+		if verifyOnly {
+			return true, nil
 		}
 		err = os.Chtimes(tp, fd.ModTime, fd.ModTime)
 		if err == nil {
@@ -479,7 +456,7 @@ func restoreNode(fd *FileData, cm *CMgr, resDir string, testRun bool, merge bool
 			if err == nil {
 				err = os.Rename(tp, p)
 				if err == nil {
-					return nil
+					return true, nil
 				}
 			}
 		}
@@ -487,7 +464,7 @@ func restoreNode(fd *FileData, cm *CMgr, resDir string, testRun bool, merge bool
 	if tp != "" {
 		os.Remove(tp)
 	}
-	return err
+	return false, err
 }
 
 func setup(repo string, pwFile string) (*VMgr, *CMgr, *Config, error) {
@@ -615,7 +592,6 @@ func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose
 	buf := &sharedBuf{}
 	comb := append(append([]string(nil), vfdm.names...), sfdm.names...)
 	sort.Strings(comb)
-	sort.Sort(byDirFile(comb))
 	var last string
 	var fds []*FileData
 	for _, n := range comb {
@@ -637,19 +613,21 @@ func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose
 	return nil
 }
 
-func Restore(pwFile, repo, resDir, version string, merge, testRun, dryRun, verbose bool, patterns []string) error {
+func Restore(pwFile, repo, resDir, version string, merge, verifyOnly, dryRun, verbose bool, patterns []string) error {
 	if repo == "" {
 		return errors.New("Backup repository must be specified.")
 	}
-	if resDir == "" && !testRun && !dryRun {
+	if resDir == "" && !verifyOnly {
 		return errors.New("Target must be specified.")
 	}
 	vm, cm, cfg, err := setup(repo, pwFile)
 	if err != nil {
 		return err
 	}
-	if nodeExists(resDir) && !merge {
-		return fmt.Errorf("Restore dir %s already exists", resDir)
+	if !merge {
+		if _, err := os.Lstat(resDir); !os.IsNotExist(err) {
+			return fmt.Errorf("Restore dir %s already exists", resDir)
+		}
 	}
 	if version == "" {
 		version, err = vm.GetLatestVersion()
@@ -660,20 +638,29 @@ func Restore(pwFile, repo, resDir, version string, merge, testRun, dryRun, verbo
 			return errors.New("Error! Nothing to restore. Repository is empty")
 		}
 	}
-	fds, err, errs := vm.LoadFiles(version)
+	allFiles, err, errs := vm.LoadFiles(version)
 	if err != nil {
 		return fmt.Errorf("Cannot read version file: %s", err)
 	}
-	if !testRun && !dryRun {
-		os.MkdirAll(resDir, DEFAULT_DIR_PERM)
-	}
-	for _, fd := range fds {
+	var fds []*FileData
+	for _, fd := range allFiles {
 		if matchRestorePatterns(fd.Name, patterns) {
-			if !dryRun {
-				err = restoreNode(fd, cm, resDir, testRun, merge, cfg.FPSecret)
+			fds = append(fds, fd)
+		}
+	}
+	allFiles = nil
+	for _, fd := range fds {
+		if fd.IsDir() || fd.IsSymlink() {
+			var acted = true
+			if !verifyOnly {
+				if fd.IsDir() {
+					acted, err = restoreDir(fd, resDir, dryRun)
+				} else {
+					acted, err = restoreSymlink(fd, resDir, dryRun)
+				}
 			}
 			if err == nil {
-				if verbose {
+				if verbose && acted {
 					fmt.Fprintf(stdout, "%s\n", fd.PrettyPrint())
 				}
 			} else {
@@ -682,10 +669,24 @@ func Restore(pwFile, repo, resDir, version string, merge, testRun, dryRun, verbo
 			}
 		}
 	}
-	for i := len(fds) - 1; i >= 0; i-- {
-		fd := fds[i]
-		if matchRestorePatterns(fd.Name, patterns) {
-			if !dryRun && !testRun && fd.IsDir() {
+	for _, fd := range fds {
+		if fd.IsFile() {
+			var acted = true
+			acted, err = restoreFile(fd, cm, resDir, merge, verifyOnly, dryRun, cfg.FPSecret)
+			if err == nil {
+				if verbose && acted {
+					fmt.Fprintf(stdout, "%s\n", fd.PrettyPrint())
+				}
+			} else {
+				fmt.Fprintf(stderr, "F %s: %s\n", fd.PrettyPrint(), err)
+				errs++
+			}
+		}
+	}
+	if !dryRun && !verifyOnly {
+		for i := len(fds) - 1; i >= 0; i-- {
+			fd := fds[i]
+			if fd.IsDir() {
 				err = os.Chmod(path.Join(resDir, fd.Name), fd.Perm)
 				if err != nil {
 					fmt.Fprintf(stderr, "F %s: %s\n", fd.PrettyPrint(), err)
