@@ -687,10 +687,13 @@ func Restore(pwFile, repo, resDir, version string, merge, verifyOnly, dryRun, ve
 		for i := len(fds) - 1; i >= 0; i-- {
 			fd := fds[i]
 			if fd.IsDir() {
-				err = os.Chmod(path.Join(resDir, fd.Name), fd.Perm)
-				if err != nil {
-					fmt.Fprintf(stderr, "F %s: %s\n", fd.PrettyPrint(), err)
-					errs++
+				fi, err := os.Lstat(path.Join(resDir, fd.Name))
+				if err != nil || fi.Mode() != fd.Perm {
+					err = os.Chmod(path.Join(resDir, fd.Name), fd.Perm)
+					if err != nil {
+						fmt.Fprintf(stderr, "F %s: %s\n", fd.PrettyPrint(), err)
+						errs++
+					}
 				}
 			}
 		}
