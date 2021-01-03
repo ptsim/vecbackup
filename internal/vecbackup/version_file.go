@@ -318,10 +318,10 @@ func (vm *VMgr) LoadFiles(v string) ([]*FileData, error, int) {
 		}
 		fd, err := ConvertFromNodeDataProto(nd)
 		if err != nil {
-			fmt.Fprintf(stderr, "F %s: Invalid data: %s", nd.Name, err)
+			stderr.Printf("F %s: Invalid data: %s", nd.Name, err)
 			errs++
 		} else if !fd.IsValid() {
-			fmt.Fprintf(stderr, "F %s: Invalid data", nd.Name)
+			stderr.Printf("F %s: Invalid data", nd.Name)
 			errs++
 		} else {
 			fds = append(fds, fd)

@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -32,8 +33,8 @@ const (
 	PATH_SEP                = string(os.PathSeparator)
 )
 
-var stdout io.Writer = os.Stdout
-var stderr io.Writer = os.Stderr
+var stdout = log.New(os.Stdout, "", 0)
+var stderr = log.New(os.Stderr, "", 0) // log.Lshortfile)
 var debug = false
 
 func SetDebug(dbg bool) {
@@ -114,7 +115,7 @@ func (fdm *fileDataMap) AddItem(fd *FileData) bool {
 func scanOneDir(src string, f os.FileInfo, excludes []string, fdm *fileDataMap) int {
 	if f == nil {
 		if fi, err := os.Lstat(src); err != nil {
-			fmt.Fprintf(stderr, "F %s: %s\n", src, err)
+			stderr.Printf("F %s: %s\n", src, err)
 			return 1
 		} else {
 			f = fi
@@ -123,7 +124,7 @@ func scanOneDir(src string, f os.FileInfo, excludes []string, fdm *fileDataMap) 
 	if f.IsDir() {
 		if fdm.AddItem(NewDirectory(src, f.Mode().Perm())) {
 			if files, err := ioutil.ReadDir(src); err != nil {
-				fmt.Fprintf(stderr, "F %s: %s\n", src, err)
+				stderr.Printf("F %s: %s\n", src, err)
 				return 1
 			} else {
 				errs := 0
@@ -141,7 +142,7 @@ func scanOneDir(src string, f os.FileInfo, excludes []string, fdm *fileDataMap) 
 		fdm.AddItem(NewRegularFile(src, f.Size(), f.ModTime(), f.Mode().Perm(), nil, nil, nil))
 	} else if isSymlink(f) {
 		if target, err := os.Readlink(src); err != nil {
-			fmt.Fprintf(stderr, "F %s: %s\n", src, err)
+			stderr.Printf("F %s: %s\n", src, err)
 			return 1
 		} else {
 			fdm.AddItem(NewSymlink(src, target))
@@ -160,21 +161,6 @@ func scanSrcs(excludes []string, srcs []string) (*fileDataMap, int) {
 		errs = errs + err2
 	}
 	return fdm, errs
-}
-
-type sharedBuf struct {
-	bf []byte
-}
-
-func (b *sharedBuf) Realloc(size int) {
-	if cap(b.bf) < size {
-		b.bf = make([]byte, size)
-	}
-	b.bf = b.bf[:size]
-}
-
-func (b *sharedBuf) B() []byte {
-	return b.bf
 }
 
 func makeChunkFP(secret []byte, origFp FP) FP {
@@ -202,11 +188,13 @@ func statsRemoveFile(fd *FileData, stats *BackupStats) {
 	}
 }
 
-func backupOneNode(cm *CMgr, cs int32, dryRun, force, verbose bool, buf *sharedBuf, out io.Writer, old *FileData, new *FileData, secret []byte, stats *BackupStats) (*FileData, error) {
+func backupOneNode(cm *CMgr, cs int32, dryRun, force, verbose bool, old *FileData, new *FileData, secret []byte, mu *sync.Mutex, stats *BackupStats) (*FileData, error) {
+	mu.Lock()
+	defer mu.Unlock()
 	if old != nil && new == nil {
 		statsRemoveFile(old, stats)
 		if verbose {
-			fmt.Fprintf(out, "- %s\n", old.PrettyPrint())
+			stdout.Printf("- %s\n", old.PrettyPrint())
 		}
 		return nil, nil
 	}
@@ -216,7 +204,7 @@ func backupOneNode(cm *CMgr, cs int32, dryRun, force, verbose bool, buf *sharedB
 	} else if old.IsFile() {
 		for _, chunk := range old.Chunks {
 			if !cm.FindChunk(chunk) {
-				fmt.Fprintf(stderr, "Missing chunk %s\n", chunk)
+				stderr.Printf("Missing chunk %s\n", chunk)
 				to_add = new
 				break
 			}
@@ -227,13 +215,16 @@ func backupOneNode(cm *CMgr, cs int32, dryRun, force, verbose bool, buf *sharedB
 	if to_add == new {
 		if new.IsFile() {
 			if !dryRun {
-				if added, added2, err := addChunks(new, cm, cs, dryRun, buf, secret); err != nil {
-					fmt.Fprintf(stderr, "F %s: %s\n", to_add.PrettyPrint(), err)
+				mu.Unlock()
+				srcAdded, repoAdded, err := addChunks(new, cm, cs, dryRun, secret)
+				mu.Lock()
+				if err != nil {
+					stderr.Printf("F %s: %s\n", to_add.PrettyPrint(), err)
 					stats.Errors++
 					return nil, err
 				} else {
-					addSrcSize = added
-					addRepoSize = added2
+					addSrcSize = srcAdded
+					addRepoSize = repoAdded
 				}
 			}
 			if old == nil || !old.IsFile() {
@@ -258,7 +249,7 @@ func backupOneNode(cm *CMgr, cs int32, dryRun, force, verbose bool, buf *sharedB
 			}
 		}
 		if verbose {
-			fmt.Fprintf(out, "+ %v\n", to_add.PrettyPrint())
+			stdout.Printf("+ %v\n", to_add.PrettyPrint())
 		}
 	} else {
 		if !old.IsSymlink() {
@@ -268,8 +259,8 @@ func backupOneNode(cm *CMgr, cs int32, dryRun, force, verbose bool, buf *sharedB
 	if to_add.IsFile() {
 		stats.Files++
 		stats.Size += new.Size
-		stats.AddSrcSize += addSrcSize
-		stats.AddRepoSize += addRepoSize
+		stats.SrcAdded += addSrcSize
+		stats.RepoAdded += addRepoSize
 	} else if to_add.IsDir() {
 		stats.Dirs++
 	} else {
@@ -278,7 +269,7 @@ func backupOneNode(cm *CMgr, cs int32, dryRun, force, verbose bool, buf *sharedB
 	return to_add, nil
 }
 
-func addChunks(fd *FileData, cm *CMgr, bs int32, dryRun bool, buf *sharedBuf, secret []byte) (int64, int64, error) {
+func addChunks(fd *FileData, cm *CMgr, bs int32, dryRun bool, secret []byte) (int64, int64, error) {
 	h := sha512.New512_256()
 	var chunks []FP = nil
 	var sizes []int32
@@ -287,14 +278,14 @@ func addChunks(fd *FileData, cm *CMgr, bs int32, dryRun bool, buf *sharedBuf, se
 		return 0, 0, err
 	}
 	defer file.Close()
-	buf.Realloc(int(bs))
+	buf := make([]byte, bs)
 	var n int64 = 0
-	var added int64 = 0
-	var addedActual int64 = 0
+	var srcAdded int64 = 0
+	var repoAdded int64 = 0
 	for {
-		count, err := io.ReadFull(file, buf.B())
+		count, err := io.ReadFull(file, buf)
 		if count > 0 {
-			b := buf.B()[:count]
+			b := buf[:count]
 			n += int64(count)
 			h.Write(b)
 			var chunk FP = makeChunkFP(secret, sha512.Sum512_256(b))
@@ -302,9 +293,9 @@ func addChunks(fd *FileData, cm *CMgr, bs int32, dryRun bool, buf *sharedBuf, se
 			if err != nil {
 				return 0, 0, err
 			}
+			srcAdded = srcAdded + int64(count)
 			if !dup {
-				added = added + int64(count)
-				addedActual = addedActual + int64(compressedLen)
+				repoAdded = repoAdded + int64(compressedLen)
 			}
 			chunks = append(chunks, chunk)
 			sizes = append(sizes, int32(count))
@@ -322,7 +313,7 @@ func addChunks(fd *FileData, cm *CMgr, bs int32, dryRun bool, buf *sharedBuf, se
 	fd.Chunks = chunks
 	fd.Sizes = sizes
 	fd.FileChecksum = h.Sum(nil)
-	return added, addedActual, nil
+	return srcAdded, repoAdded, nil
 }
 
 func matchRestorePatterns(fp string, patterns []string) bool {
@@ -350,7 +341,7 @@ func restoreFileToTemp(fd *FileData, cm *CMgr, fn string, verifyOnly bool, secre
 	if !verifyOnly {
 		d := filepath.Dir(fn)
 		err := os.MkdirAll(d, DEFAULT_DIR_PERM)
-		f, err = os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, DEFAULT_FILE_PERM)
+		f, err = os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fd.Perm|DEFAULT_FILE_PERM)
 		if err != nil {
 			return err
 		}
@@ -382,7 +373,9 @@ func restoreFileToTemp(fd *FileData, cm *CMgr, fn string, verifyOnly bool, secre
 	if l != fd.Size {
 		return fmt.Errorf("Length mismatch: %d vs %d", l, fd.Size)
 	}
-	if bytes.Compare(fd.FileChecksum, h.Sum(nil)) != 0 {
+	cs := h.Sum(nil)
+	if bytes.Compare(fd.FileChecksum, cs) != 0 {
+		fmt.Println("CHECKSUMS", fd.FileChecksum, cs)
 		return errors.New("File checksum mismatch")
 	}
 	return nil
@@ -398,7 +391,7 @@ func restoreDir(fd *FileData, resDir string, dryRun bool) (bool, error) {
 		if dryRun {
 			return true, nil
 		}
-		return true, os.MkdirAll(p, DEFAULT_DIR_PERM)
+		return true, os.MkdirAll(p, fd.Perm|DEFAULT_DIR_PERM)
 	}
 	if !fi.IsDir() {
 		return false, errors.New("Cannot dir. File/symlink already exist at the path.")
@@ -520,11 +513,11 @@ type BackupStats struct {
 	SymlinksRemoved int
 	Errors          int
 	Size            int64
-	AddSrcSize      int64
-	AddRepoSize     int64
+	SrcAdded        int64
+	RepoAdded       int64
 }
 
-func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose bool, lockFile string, srcs []string, stats *BackupStats) error {
+func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose bool, lockFile string, maxDop int, srcs []string, stats *BackupStats) error {
 	if repo == "" {
 		return errors.New("Backup repository must be specified.")
 	}
@@ -585,25 +578,39 @@ func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose
 		stats.Errors += errs
 		for _, fd := range fds {
 			if !vfdm.AddItem(fd) {
-				fmt.Fprintf(stderr, "Ignoring duplicate item in version file: %s.\n", fd.Name)
+				stderr.Printf("Ignoring duplicate item in version file: %s.\n", fd.Name)
 			}
 		}
 	}
-	buf := &sharedBuf{}
 	comb := append(append([]string(nil), vfdm.names...), sfdm.names...)
 	sort.Strings(comb)
 	var last string
 	var fds []*FileData
+	var wg sync.WaitGroup
+	var mu sync.Mutex // protect fds and stats
+	ch := make(chan int, maxDop)
+	for i := 0; i < maxDop; i++ {
+		ch <- 1
+	}
 	for _, n := range comb {
 		if n == last {
 			continue
 		}
 		last = n
-		new_fd, err := backupOneNode(cm, cfg.ChunkSize, dryRun, force, verbose, buf, stdout, vfdm.files[n], sfdm.files[n], cfg.FPSecret, stats)
-		if err == nil && new_fd != nil {
-			fds = append(fds, new_fd)
-		}
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			<-ch
+			defer func() { ch <- 1 }()
+			new_fd, err := backupOneNode(cm, cfg.ChunkSize, dryRun, force, verbose, vfdm.files[name], sfdm.files[name], cfg.FPSecret, &mu, stats)
+			if err == nil && new_fd != nil {
+				mu.Lock()
+				fds = append(fds, new_fd)
+				mu.Unlock()
+			}
+		}(n)
 	}
+	wg.Wait()
 	if !dryRun {
 		if err = vm.SaveFiles(new_version, fds); err != nil {
 			return err
@@ -613,7 +620,7 @@ func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose
 	return nil
 }
 
-func Restore(pwFile, repo, resDir, version string, merge, verifyOnly, dryRun, verbose bool, patterns []string) error {
+func Restore(pwFile, repo, resDir, version string, merge, verifyOnly, dryRun, verbose bool, maxDop int, patterns []string) error {
 	if repo == "" {
 		return errors.New("Backup repository must be specified.")
 	}
@@ -642,14 +649,18 @@ func Restore(pwFile, repo, resDir, version string, merge, verifyOnly, dryRun, ve
 	if err != nil {
 		return fmt.Errorf("Cannot read version file: %s", err)
 	}
-	var fds []*FileData
+	fdm := make(map[string]*FileData)
+	var names []string
 	for _, fd := range allFiles {
 		if matchRestorePatterns(fd.Name, patterns) {
-			fds = append(fds, fd)
+			fdm[fd.Name] = fd
+			names = append(names, fd.Name)
 		}
 	}
+	sort.Strings(names)
 	allFiles = nil
-	for _, fd := range fds {
+	for _, name := range names {
+		fd := fdm[name]
 		if fd.IsDir() || fd.IsSymlink() {
 			var acted = true
 			if !verifyOnly {
@@ -661,37 +672,52 @@ func Restore(pwFile, repo, resDir, version string, merge, verifyOnly, dryRun, ve
 			}
 			if err == nil {
 				if verbose && acted {
-					fmt.Fprintf(stdout, "%s\n", fd.PrettyPrint())
+					stdout.Printf("%s\n", fd.PrettyPrint())
 				}
 			} else {
-				fmt.Fprintf(stderr, "F %s: %s\n", fd.PrettyPrint(), err)
+				stderr.Printf("F %s: %s\n", fd.PrettyPrint(), err)
 				errs++
 			}
 		}
 	}
-	for _, fd := range fds {
+	var wg sync.WaitGroup
+	var mu sync.Mutex // protects errs
+	ch := make(chan int, maxDop)
+	for i := 0; i < maxDop; i++ {
+		ch <- 1
+	}
+	for _, name := range names {
+		fd := fdm[name]
 		if fd.IsFile() {
-			var acted = true
-			acted, err = restoreFile(fd, cm, resDir, merge, verifyOnly, dryRun, cfg.FPSecret)
-			if err == nil {
-				if verbose && acted {
-					fmt.Fprintf(stdout, "%s\n", fd.PrettyPrint())
+			wg.Add(1)
+			go func(fd *FileData) {
+				defer wg.Done()
+				<-ch
+				defer func() { ch <- 1 }()
+				acted, e := restoreFile(fd, cm, resDir, merge, verifyOnly, dryRun, cfg.FPSecret)
+				if e == nil {
+					if verbose && acted {
+						stdout.Printf("%s\n", fd.PrettyPrint())
+					}
+				} else {
+					stderr.Printf("F %s: %s\n", fd.PrettyPrint(), e)
+					mu.Lock()
+					errs++
+					mu.Unlock()
 				}
-			} else {
-				fmt.Fprintf(stderr, "F %s: %s\n", fd.PrettyPrint(), err)
-				errs++
-			}
+			}(fd)
 		}
 	}
+	wg.Wait()
 	if !dryRun && !verifyOnly {
-		for i := len(fds) - 1; i >= 0; i-- {
-			fd := fds[i]
+		for i := len(names) - 1; i >= 0; i-- {
+			fd := fdm[names[i]]
 			if fd.IsDir() {
 				fi, err := os.Lstat(path.Join(resDir, fd.Name))
 				if err != nil || fi.Mode() != fd.Perm {
 					err = os.Chmod(path.Join(resDir, fd.Name), fd.Perm)
 					if err != nil {
-						fmt.Fprintf(stderr, "F %s: %s\n", fd.PrettyPrint(), err)
+						stderr.Printf("F %s: %s\n", fd.PrettyPrint(), err)
 						errs++
 					}
 				}
@@ -725,7 +751,7 @@ func Ls(pwFile, repo, version string) error {
 		return fmt.Errorf("Cannot read version file: %s", err)
 	}
 	for _, fd := range fds {
-		fmt.Fprintf(stdout, "%s\n", fd.PrettyPrint())
+		stdout.Printf("%s\n", fd.PrettyPrint())
 	}
 	if errs > 0 {
 		return errors.New("Error! Some file info were invalid.")
@@ -746,7 +772,7 @@ func Versions(pwFile, repo string) error {
 		return fmt.Errorf("Cannot read version files: %s", err)
 	}
 	for _, v := range versions {
-		fmt.Fprintf(stdout, "%s\n", v)
+		stdout.Printf("%s\n", v)
 	}
 	return nil
 }
@@ -783,7 +809,7 @@ func DeleteOldVersions(pwFile, repo string, dryRun bool) error {
 	}
 	d := ReduceVersions(time.Now(), versions)
 	for _, v := range d {
-		fmt.Fprintf(stdout, "Deleting version %s\n", v)
+		stdout.Printf("Deleting version %s\n", v)
 		if !dryRun {
 			err = vm.DeleteVersion(v)
 			if err != nil {
@@ -798,7 +824,7 @@ type VerifyRepoResults struct {
 	Chunks, Ok, Errors, Missing, Unused int
 }
 
-func VerifyRepo(pwFile, repo string, quick bool, r *VerifyRepoResults) error {
+func VerifyRepo(pwFile, repo string, quick bool, maxDop int, r *VerifyRepoResults) error {
 	if repo == "" {
 		return errors.New("Backup repository must be specified.")
 	}
@@ -810,80 +836,129 @@ func VerifyRepo(pwFile, repo string, quick bool, r *VerifyRepoResults) error {
 	if err != nil {
 		return fmt.Errorf("Cannot read version files: %s", err)
 	}
-	counts := cm.GetAllChunks()
+	allOk := make(map[FP]bool)
+	allErrors := make(map[FP]bool)
+	allMissing := make(map[FP]bool)
 	fail := false
+	totalFiles := 0
+	totalBadFiles := 0
+	var wg sync.WaitGroup
+	var mu sync.Mutex // protects vr, allOk, allErrors, AllMissing
+	ch := make(chan int, maxDop)
+	for i := 0; i < maxDop; i++ {
+		ch <- 1
+	}
 	sort.Sort(sort.Reverse(sort.StringSlice(versions)))
 	for _, v := range versions {
-		var chunksError, chunksMissing int
-		var size int64
 		fds, err, nerrs := vm.LoadFiles(v)
 		if err != nil {
-			fmt.Fprintf(stderr, "Failed to read version %s : %s\n", v, err)
+			stderr.Printf("Failed to read version %s : %s\n", v, err)
 			fail = true
 			continue
 		}
-		vChunks := make(map[FP]int)
+		if nerrs > 0 {
+			fail = true
+		}
+		vChunks := make(map[FP]int32)
 		for _, fd := range fds {
 			for i, chunk := range fd.Chunks {
-				size = size + int64(fd.Sizes[i])
-				vChunks[chunk]++
-				if vChunks[chunk] > 1 {
-					continue
+				vChunks[chunk] = fd.Sizes[i]
+			}
+		}
+		var vr VerifyRepoResults
+		vr.Chunks = len(vChunks)
+		var size int64
+		mu.Lock()
+		for chunk, chunkSize := range vChunks {
+			size = size + int64(chunkSize)
+			if allOk[chunk] {
+				vr.Ok++
+			} else if allErrors[chunk] {
+				vr.Errors++
+			} else if allMissing[chunk] {
+				vr.Missing++
+			} else if quick {
+				if cm.FindChunk(chunk) {
+					vr.Ok++
+					allOk[chunk] = true
+				} else {
+					stderr.Printf("Missing chunk %s\n", chunk)
+					vr.Missing++
+					allMissing[chunk] = true
 				}
-				counts[chunk]++
-				if counts[chunk] == 1 {
-					if quick {
-						if cm.FindChunk(chunk) {
-							r.Ok++
+			} else {
+				wg.Add(1)
+				go func(cc FP) {
+					defer wg.Done()
+					<-ch
+					defer func() { ch <- 1 }()
+					b, err := cm.ReadChunk(cc)
+					if err == nil && !matchChunkFP(cfg.FPSecret, cc, b) {
+						err = fmt.Errorf("Mismatch fingerpint %s", cc)
+					}
+					if err != nil {
+						if os.IsNotExist(err) {
+							stderr.Printf("Missing chunk %s\n", cc)
+							mu.Lock()
+							vr.Missing++
+							allMissing[cc] = true
+							mu.Unlock()
 						} else {
-							r.Missing++
-							chunksMissing++
+							stderr.Printf("Error chunk %s\n", cc)
+							mu.Lock()
+							vr.Errors++
+							allErrors[cc] = true
+							mu.Unlock()
 						}
 					} else {
-						b, err := cm.ReadChunk(chunk)
-						if err == nil && !matchChunkFP(cfg.FPSecret, chunk, b) {
-							err = fmt.Errorf("Mismatch fingerpint %s", chunk)
-						}
-						if err != nil {
-							if os.IsNotExist(err) {
-								fmt.Fprintf(stderr, "Missing chunk %s\n", chunk)
-								r.Missing++
-								chunksMissing++
-							} else {
-								fmt.Fprintf(stderr, "Error chunk %s : %s\n", chunk, err)
-								r.Errors++
-								chunksError++
-							}
-						} else {
-							r.Ok++
-						}
+						mu.Lock()
+						vr.Ok++
+						allOk[cc] = true
+						mu.Unlock()
 					}
+				}(chunk)
+			}
+		}
+		mu.Unlock()
+		wg.Wait()
+		badFiles := 0
+		files := len(fds)
+		for _, fd := range fds {
+			for _, chunk := range fd.Chunks {
+				if allErrors[chunk] || allMissing[chunk] {
+					badFiles++
+					stderr.Printf("F %s\n", fd.Name)
+					break
 				}
 			}
 		}
-		chunks := len(vChunks)
-		chunksOk := chunks - chunksError - chunksMissing
+		totalFiles += files
+		totalBadFiles += badFiles
 		if quick {
 			if nerrs > 0 {
-				fmt.Fprintf(stdout, "Version %s : %d bytes, %d chunk(s), %d missing. %d invalid file info.\n", v, size, chunks, chunksMissing, nerrs)
+				stdout.Printf("Version %s : %d bytes, %d chunk(s), %d missing. %d files, %d bad. %d invalid file info.\n", v, size, vr.Chunks, vr.Missing, files, badFiles, nerrs)
 			} else {
-				fmt.Fprintf(stdout, "Version %s : %d bytes, %d chunk(s), %d missing.\n", v, size, chunks, chunksMissing)
+				stdout.Printf("Version %s : %d bytes, %d chunk(s), %d missing. %d files, %d bad.\n", v, size, vr.Chunks, vr.Missing, files, badFiles)
 			}
 		} else {
 			if nerrs > 0 {
-				fmt.Fprintf(stdout, "Version %s : %d bytes, %d chunk(s), %d good, %d bad, %d missing. %d invalid file info.\n", v, size, chunks, chunksOk, chunksError, chunksMissing, nerrs)
+				stdout.Printf("Version %s : %d bytes, %d chunk(s), %d good, %d bad, %d missing. %d files, %d bad. %d invalid file info.\n", v, size, vr.Chunks, vr.Ok, vr.Errors, vr.Missing, files, badFiles, nerrs)
 			} else {
-				fmt.Fprintf(stdout, "Version %s : %d bytes, %d chunk(s), %d good, %d bad, %d missing.\n", v, size, chunks, chunksOk, chunksError, chunksMissing)
+				stdout.Printf("Version %s : %d bytes, %d chunk(s), %d good, %d bad, %d missing. %d files, %d bad.\n", v, size, vr.Chunks, vr.Ok, vr.Errors, vr.Missing, files, badFiles)
 			}
 		}
 	}
-	for _, count := range counts {
-		r.Chunks++
-		if count == 0 {
+	allChunks := cm.GetAllChunks()
+	r.Chunks = len(allChunks)
+	r.Ok = len(allOk)
+	r.Errors = len(allErrors)
+	r.Missing = len(allMissing)
+	for chunk, _ := range allChunks {
+		if !(allOk[chunk] || allErrors[chunk] || allMissing[chunk]) {
 			r.Unused++
 		}
 	}
-	fmt.Fprintf(stdout, "Summary: %d chunk(s), %d good, %d bad, %d missing, %d unused\n", r.Chunks, r.Ok, r.Errors, r.Missing, r.Unused)
+	stdout.Printf("Summary: %d chunk(s), %d good, %d bad, %d missing, %d unused. %d files, %d bad.\n", r.Chunks, r.Ok, r.Errors, r.Missing, r.Unused, totalFiles, totalBadFiles)
 	if fail || r.Errors > 0 || r.Missing > 0 {
 		return errors.New("Error verifying repo.")
 	}
@@ -923,27 +998,27 @@ func PurgeUnused(pwFile, repo string, dryRun, verbose bool) error {
 	for chunk, _ := range counts {
 		if dryRun {
 			if verbose {
-				fmt.Fprintf(stdout, "Delete %s\n", chunk)
+				stdout.Printf("Delete %s\n", chunk)
 			}
 			numDeleted++
 		} else {
 			if err := cm.DeleteChunk(chunk); err != nil {
 				numFailed++
 				if verbose {
-					fmt.Fprintf(stdout, "Failed to delete %s: %s\n", chunk, err)
+					stdout.Printf("Failed to delete %s: %s\n", chunk, err)
 				}
 			} else {
 				numDeleted++
 				if verbose {
-					fmt.Fprintf(stdout, "Deleted %s\n", chunk)
+					stdout.Printf("Deleted %s\n", chunk)
 				}
 			}
 		}
 	}
 	if dryRun {
-		fmt.Fprintf(stdout, "Chunks to be purged (dryrun): %d out of %d.\n", numDeleted, total_chunks)
+		stdout.Printf("Chunks to be purged (dryrun): %d out of %d.\n", numDeleted, total_chunks)
 	} else {
-		fmt.Fprintf(stdout, "Chunks purged: %d out of %d.\n", numDeleted, total_chunks)
+		stdout.Printf("Chunks purged: %d out of %d.\n", numDeleted, total_chunks)
 	}
 	if numFailed > 0 {
 		return fmt.Errorf("Failed to purge %d chunk(s).", numFailed)

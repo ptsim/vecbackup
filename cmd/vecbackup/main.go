@@ -14,13 +14,13 @@ func usageAndExit() {
 	fmt.Fprintf(os.Stderr, `Usage:
   vecbackup help
   vecbackup init [-pw <pwfile>] [-chunk-size size] [-pbkdf2-iterations num] -r <repo>
-  vecbackup backup [-v] [-f] [-n] [-version <version>] [-pw <pwfile>] [-exclude-from <file>] -r <repo> <src> [<src> ...]
+  vecbackup backup [-v] [-f] [-n] [-version <version>] [-pw <pwfile>] [-exclude-from <file>] [-lock-file <file>] [-max-dop n] -r <repo> <src> [<src> ...]
   vecbackup ls [-version <version>] [-pw <pwfile>] -r <repo>
   vecbackup versions [-pw <pwfile>] -r <repo>
-  vecbackup restore [-v] [-n] [-verify-only] [-version <version>] [-merge] [-pw <pwfile>] -r <repo> -target <restoredir> [<path> ...]
+  vecbackup restore [-v] [-n] [-version <version>] [-merge] [-pw <pwfile>] [-verify-only] [-max-dop n] -r <repo> -target <restoredir> [<path> ...]
   vecbackup delete-version [-pw <pwfile>] -r <repo> -version <version>
   vecbackup delete-old-versions [-n] [-pw <pwfile>] -r <repo>
-  vecbackup verify-repo [-pw <pwfile>] [-quick] -r <repo>
+  vecbackup verify-repo [-pw <pwfile>] [-quick] [-max-dop n] -r <repo>
   vecbackup purge-unused [-v] [-pw <pwfile>] [-n] -r <repo>
   vecbackup remove-lock [-r <repo>] [-lock-file <file>]
 `)
@@ -46,12 +46,13 @@ func help() {
 
     Initialize a new backup repository.
 
-  vecbackup backup [-v] [-f] [-n] [-version <version>] [-pw <pwfile>] [-exclude-from <file>] [-lock-file <file>] -r <repo> <src> [<src> ...]
+  vecbackup backup [-v] [-f] [-n] [-version <version>] [-pw <pwfile>] [-exclude-from <file>] [-lock-file <file>] [-max-dop n] -r <repo> <src> [<src> ...]
     Incrementally and recursively backs up one or more <src> to <repo>.
     The files, directories and symbolic links backed up. Other file types are silently ignored.
     Files that have not changed in same size and timestamp are not backed up.
-    A lock file is created to prevent concurrent backups and removed when done.
-    again.
+    A lock file is created to prevent starting another backup operation when one is
+    already in progress. It is removed when done. Running simultaneous backups isn't
+    recommended. It is slow because the second backup is repeating the work of the first.
       -v            verbose, prints the items that are added (+) or removed (-).
       -f            force, always check file contents 
       -n            dry run, shows what would have been backed up.
@@ -67,7 +68,7 @@ func help() {
     Lists files in <repo>.
     -version <version>   list the files in that version
 
-  vecbackup restore [-v] [-n] [-version <version>] [-merge] [-pw <pwfile>] [-verify-only] -r <repo> -target <restoredir> [<path> ...]
+  vecbackup restore [-v] [-n] [-version <version>] [-merge] [-pw <pwfile>] [-verify-only] [-max-dop n] -r <repo> -target <restoredir> [<path> ...]
     Restores all the items or the given <path>s to <restoredir>.
       -v            verbose, prints the names of all items restored
       -n            dry run, shows what would have been restored.
@@ -93,7 +94,7 @@ func help() {
     year and one version per month otherwise.
       -n            dry run, shows versions that would have been deleted
 
-  vecbackup verify-repo [-pw <pwfile>] -r <repo>
+  vecbackup verify-repo [-pw <pwfile>] [-quick] [-max-dop n] -r <repo>
     Verifies that all the chunks used by all the files in all versions
     can be read and match their checksums.
       -quick        Quick, just checks that the chunks exist.
@@ -112,6 +113,12 @@ Common flags:
       -r            Path to backup repository.
       -pw           file containing the password
       -rclone-binary  Path to the "rclone" program
+      -max-dop      maximum degree of parallelism. Default 3. 
+                    Minimum 1. Maximum 100. Increasing this number increases
+                    memory, cpu, disk and network usage but reduces total time.
+                    Set environment variable GOGC=20 to reduce memory usage when
+                    using a big degree of parallelism.
+                    Only used for backup, restore and verify-repo commands.
 
 Remote repository:
   If the repository path starts with "rclone:", the rest of the path is passed to rclone
@@ -150,6 +157,7 @@ var compress = flag.String("compress", "auto", "Compression mode")
 var quick = flag.Bool("quick", false, "Quick mode")
 var rclone = flag.String("rclone-binary", "rclone", "Path to rclone binary")
 var lockFile = flag.String("lock-file", "", "Lock file path")
+var maxDop = flag.Int("max-dop", 3, "Maximum degree of parallelism.")
 
 func exitIfError(err error) {
 	if err != nil {
@@ -192,21 +200,27 @@ func main() {
 		help()
 	} else if cmd == "backup" {
 		var stats vecbackup.BackupStats
-		exitIfError(vecbackup.Backup(*pwFile, *repo, *excludeFrom, *version, *dryRun, *force, *verbose, *lockFile, flag.Args(), &stats))
+		if *maxDop < 1 || *maxDop > 100 {
+			exitIfError(errors.New("-max-dop must be between 1 and 100.\n"))
+		}
+		exitIfError(vecbackup.Backup(*pwFile, *repo, *excludeFrom, *version, *dryRun, *force, *verbose, *lockFile, *maxDop, flag.Args(), &stats))
 		if *dryRun {
 			fmt.Printf("Backup dry run\n%d dir(s) (%d new %d updated %d removed)\n%d file(s) (%d new %d updated %d removed)\n%d symlink(s) (%d new %d updated %d removed)\ntotal src size %d\n%d error(s).\n", stats.Dirs, stats.DirsNew, stats.DirsUpdated, stats.DirsRemoved, stats.Files, stats.FilesNew, stats.FilesUpdated, stats.FilesRemoved, stats.Symlinks, stats.SymlinksNew, stats.SymlinksUpdated, stats.SymlinksRemoved, stats.Size, stats.Errors)
 		} else {
-			savingsPct := float64(0)
-			if stats.AddSrcSize > 0 {
-				savingsPct = float64(stats.AddSrcSize-stats.AddRepoSize) * 100 / float64(stats.AddSrcSize)
+			newRepoPct := float64(100.0)
+			if stats.SrcAdded > 0 {
+				newRepoPct = float64(stats.RepoAdded) * 100 / float64(stats.SrcAdded)
 			}
-			fmt.Printf("Backup version %s\n%d dir(s) (%d new %d updated %d removed)\n%d file(s) (%d new %d updated %d removed)\n%d symlink(s) (%d new %d updated %d removed)\ntotal src size %d, added %d, actual added repo size %d (savings %0.1f%%)\n%d error(s).\n", stats.Version, stats.Dirs, stats.DirsNew, stats.DirsUpdated, stats.DirsRemoved, stats.Files, stats.FilesNew, stats.FilesUpdated, stats.FilesRemoved, stats.Symlinks, stats.SymlinksNew, stats.SymlinksUpdated, stats.SymlinksRemoved, stats.Size, stats.AddSrcSize, stats.AddRepoSize, savingsPct, stats.Errors)
+			fmt.Printf("Backup version %s\n%d dir(s) (%d new %d updated %d removed)\n%d file(s) (%d new %d updated %d removed)\n%d symlink(s) (%d new %d updated %d removed)\ntotal src size %d, new src size %d, repo added %d (%0.1f%% of new src size)\n%d error(s).\n", stats.Version, stats.Dirs, stats.DirsNew, stats.DirsUpdated, stats.DirsRemoved, stats.Files, stats.FilesNew, stats.FilesUpdated, stats.FilesRemoved, stats.Symlinks, stats.SymlinksNew, stats.SymlinksUpdated, stats.SymlinksRemoved, stats.Size, stats.SrcAdded, stats.RepoAdded, newRepoPct, stats.Errors)
 		}
 		if stats.Errors > 0 {
 			exitIfError(errors.New(fmt.Sprintf("%d errors encountered. Some data were not backed up.", stats.Errors)))
 		}
 	} else if cmd == "restore" {
-		exitIfError(vecbackup.Restore(*pwFile, *repo, *target, *version, *merge, *verifyOnly, *dryRun, *verbose, flag.Args()))
+		if *maxDop < 1 || *maxDop > 100 {
+			exitIfError(errors.New("-max-dop must be between 1 and 100.\n"))
+		}
+		exitIfError(vecbackup.Restore(*pwFile, *repo, *target, *version, *merge, *verifyOnly, *dryRun, *verbose, *maxDop, flag.Args()))
 	} else if flag.NArg() > 0 {
 		usageAndExit()
 	} else if cmd == "init" {
@@ -239,7 +253,10 @@ func main() {
 		exitIfError(vecbackup.DeleteOldVersions(*pwFile, *repo, *dryRun))
 	} else if cmd == "verify-repo" {
 		var r vecbackup.VerifyRepoResults
-		exitIfError(vecbackup.VerifyRepo(*pwFile, *repo, *quick, &r))
+		if *maxDop < 1 || *maxDop > 100 {
+			exitIfError(errors.New("-max-dop must be between 1 and 100.\n"))
+		}
+		exitIfError(vecbackup.VerifyRepo(*pwFile, *repo, *quick, *maxDop, &r))
 	} else if cmd == "purge-unused" {
 		exitIfError(vecbackup.PurgeUnused(*pwFile, *repo, *dryRun, *verbose))
 	} else if cmd == "remove-lock" {
