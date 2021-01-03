@@ -85,7 +85,7 @@ Not tested on Windows.
 * Install golang.
 * ```git clone https://github.com/ptsim/vecbackup.git```
 * ```cd vecbackup```
-* ```go test ./...``` (or ```go test ./... -longtest```)
+* ```go test ./...```
 * ```go build ./cmd/vecbackup```
 
 You will find the ```vecbackup``` binary in the current directory.
@@ -194,6 +194,14 @@ You will find the ```vecbackup``` binary in the current directory.
 * ```vecbackup restore -n ...```
 * ```vecbackup delete-old-versions -n ...```
 * ```vecbackup purge-unused -n ...```
+
+### Q: Is this multi-threaded?
+* By default, the ```backup```, ```restore``` and ```verify-repo``` commands run multiple operations in parallel (multi-threaded).
+* The ```-max-dop``` flag sets the maximum degree of parallellism. The default is 3.
+* If you increase the degree of parallelism, it increases memory, cpu, disk and network utilization.
+* Consider setting the environment variable GOGC=20 to increase Go runtime's garbage collection frequency and reduce the memory used.
+* If ```-max-dop``` is 1, the command will be single threaded.
+* All other commands are always single threaded.
 
 ### Q: Which older versions are kept for ```vecbackup delete-old-versions```?
 * Keeps all versions within one day
