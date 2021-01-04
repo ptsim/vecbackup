@@ -25,22 +25,25 @@ func testCMhelper(t *testing.T, key *EncKey) {
 		t.Fatalf("Can't create chunk manager: %s", err)
 	}
 	N := 100000
-	data := make([]byte, N)
+	mem := makeChunkMem(N)
+	data := mem.buf()
 	rand.Seed(1)
 	rand.Read(data)
 	var names []FP
 	for l := 0; l < N; l = 2*l + 1 {
 		text := data[:]
 		var fp FP = sha512.Sum512_256(text)
-		_, _, err := cm.AddChunk(fp, text)
+		mem.setSize(len(text))
+		_, _, err := cm.AddChunk(fp, mem)
 		if err != nil {
 			t.Fatalf("AddChunk failed: %s %s", fp, err)
 		}
 		t.Logf("Added chunk %s\n", fp)
 		names = append(names, fp)
 	}
+	mem2 := &readChunkMem{}
 	for _, fp := range names {
-		b, err := cm.ReadChunk(fp)
+		b, err := cm.ReadChunk(fp, mem2)
 		if err != nil {
 			t.Fatalf("ReadChunk failed: %s %s", fp, err)
 		}

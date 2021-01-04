@@ -1,6 +1,7 @@
 package vecbackup
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -25,7 +26,7 @@ type StorageMgr interface {
 	LsDir2(p string, f StorageMgrLsDir2Func) error
 	ExistInDir(d, f string) (bool, error)
 	MkdirAll(p string) error
-	ReadFile(p string) ([]byte, error)
+	ReadFile(p string, out, errOut *bytes.Buffer) ([]byte, error)
 	WriteFile(p string, d []byte) error
 	DeleteFile(p string) error
 	WriteLockFile(p string) error
@@ -43,6 +44,14 @@ func GetStorageMgr(p string) (StorageMgr, string) {
 		return TheRcloneSMgr, p[7:]
 	}
 	return TheLocalSMgr, p
+}
+
+func runCmd(cmd *exec.Cmd, out, errOut *bytes.Buffer) error {
+	out.Reset()
+	errOut.Reset()
+	cmd.Stdout = out
+	cmd.Stderr = errOut
+	return cmd.Run()
 }
 
 func (sm rcloneSMgr) JoinPath(d, f string) string {
@@ -163,17 +172,24 @@ func (sm localSMgr) MkdirAll(p string) error {
 	return os.MkdirAll(p, DEFAULT_DIR_PERM)
 }
 
-func (sm rcloneSMgr) ReadFile(p string) ([]byte, error) {
+func (sm rcloneSMgr) ReadFile(p string, out, errOut *bytes.Buffer) ([]byte, error) {
 	catCmd := exec.Command(rcloneBinary, "cat", p)
-	catOut, err := catCmd.Output()
+	err := runCmd(catCmd, out, errOut)
 	if err != nil {
 		return nil, err
 	}
-	return catOut, nil
+	return out.Bytes(), nil
 }
 
-func (sm localSMgr) ReadFile(p string) ([]byte, error) {
-	return ioutil.ReadFile(p)
+func (sm localSMgr) ReadFile(p string, buf, buf2 *bytes.Buffer) ([]byte, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	buf.Reset()
+	_, err = buf.ReadFrom(f)
+	return buf.Bytes(), err
 }
 
 func (sm rcloneSMgr) WriteFile(p string, d []byte) error {

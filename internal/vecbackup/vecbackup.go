@@ -34,7 +34,7 @@ const (
 )
 
 var stdout = log.New(os.Stdout, "", 0)
-var stderr = log.New(os.Stderr, "", 0) // log.Lshortfile)
+var stderr = log.New(os.Stderr, "", 0) //log.Lshortfile)
 var debug = false
 
 func SetDebug(dbg bool) {
@@ -188,7 +188,7 @@ func statsRemoveFile(fd *FileData, stats *BackupStats) {
 	}
 }
 
-func backupOneNode(cm *CMgr, cs int32, dryRun, force, verbose bool, old *FileData, new *FileData, secret []byte, mu *sync.Mutex, stats *BackupStats) (*FileData, error) {
+func backupOneNode(cm *CMgr, mem *chunkMem, dryRun, force, verbose bool, old *FileData, new *FileData, secret []byte, mu *sync.Mutex, stats *BackupStats) (*FileData, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	if old != nil && new == nil {
@@ -204,7 +204,7 @@ func backupOneNode(cm *CMgr, cs int32, dryRun, force, verbose bool, old *FileDat
 	} else if old.IsFile() {
 		for _, chunk := range old.Chunks {
 			if !cm.FindChunk(chunk) {
-				stderr.Printf("Missing chunk %s\n", chunk)
+				stderr.Printf("Missing chunk %s from file %s\n", chunk, old.PrettyPrint())
 				to_add = new
 				break
 			}
@@ -216,7 +216,7 @@ func backupOneNode(cm *CMgr, cs int32, dryRun, force, verbose bool, old *FileDat
 		if new.IsFile() {
 			if !dryRun {
 				mu.Unlock()
-				srcAdded, repoAdded, err := addChunks(new, cm, cs, dryRun, secret)
+				srcAdded, repoAdded, err := addChunks(new, cm, mem, dryRun, secret)
 				mu.Lock()
 				if err != nil {
 					stderr.Printf("F %s: %s\n", to_add.PrettyPrint(), err)
@@ -269,7 +269,7 @@ func backupOneNode(cm *CMgr, cs int32, dryRun, force, verbose bool, old *FileDat
 	return to_add, nil
 }
 
-func addChunks(fd *FileData, cm *CMgr, bs int32, dryRun bool, secret []byte) (int64, int64, error) {
+func addChunks(fd *FileData, cm *CMgr, mem *chunkMem, dryRun bool, secret []byte) (int64, int64, error) {
 	h := sha512.New512_256()
 	var chunks []FP = nil
 	var sizes []int32
@@ -278,18 +278,21 @@ func addChunks(fd *FileData, cm *CMgr, bs int32, dryRun bool, secret []byte) (in
 		return 0, 0, err
 	}
 	defer file.Close()
-	buf := make([]byte, bs)
 	var n int64 = 0
 	var srcAdded int64 = 0
 	var repoAdded int64 = 0
+	blockSize := mem.chunkSize
 	for {
+		mem.setSize(blockSize)
+		buf := mem.buf()
 		count, err := io.ReadFull(file, buf)
 		if count > 0 {
-			b := buf[:count]
+			mem.setSize(count)
+			buf := mem.buf()
 			n += int64(count)
-			h.Write(b)
-			var chunk FP = makeChunkFP(secret, sha512.Sum512_256(b))
-			dup, compressedLen, err := cm.AddChunk(chunk, b)
+			h.Write(buf)
+			var chunk FP = makeChunkFP(secret, sha512.Sum512_256(buf))
+			dup, compressedLen, err := cm.AddChunk(chunk, mem)
 			if err != nil {
 				return 0, 0, err
 			}
@@ -303,7 +306,7 @@ func addChunks(fd *FileData, cm *CMgr, bs int32, dryRun bool, secret []byte) (in
 		if n > fd.Size {
 			return 0, 0, fmt.Errorf("File size changed %s", fd.Name)
 		}
-		if err == io.EOF || count < int(bs) {
+		if err == io.EOF || count < blockSize {
 			if n < fd.Size {
 				return 0, 0, fmt.Errorf("File size changed %s", fd.Name)
 			}
@@ -336,7 +339,7 @@ func matchRestorePattern(p, pat string) bool {
 	return l == 0 || (len(p) > l && p[:l] == pat && os.IsPathSeparator(p[l]))
 }
 
-func restoreFileToTemp(fd *FileData, cm *CMgr, fn string, verifyOnly bool, secret []byte) error {
+func restoreFileToTemp(fd *FileData, cm *CMgr, mem *readChunkMem, fn string, verifyOnly bool, secret []byte) error {
 	var f *os.File
 	if !verifyOnly {
 		d := filepath.Dir(fn)
@@ -350,7 +353,7 @@ func restoreFileToTemp(fd *FileData, cm *CMgr, fn string, verifyOnly bool, secre
 	var l int64
 	h := sha512.New512_256()
 	for _, chunk := range fd.Chunks {
-		b, err := cm.ReadChunk(chunk)
+		b, err := cm.ReadChunk(chunk, mem)
 		if err == nil && !matchChunkFP(secret, chunk, b) {
 			err = fmt.Errorf("Bad chunk, mismatch fingerpint %s", chunk)
 		}
@@ -427,7 +430,7 @@ func restoreSymlink(fd *FileData, resDir string, dryRun bool) (bool, error) {
 	return false, nil
 }
 
-func restoreFile(fd *FileData, cm *CMgr, resDir string, merge, verifyOnly, dryRun bool, secret []byte) (bool, error) {
+func restoreFile(fd *FileData, cm *CMgr, mem *readChunkMem, resDir string, merge, verifyOnly, dryRun bool, secret []byte) (bool, error) {
 	p := path.Join(resDir, fd.Name)
 	if merge {
 		if fi, err := os.Lstat(p); err == nil && fi.Size() == fd.Size && fi.ModTime().Equal(fd.ModTime) {
@@ -438,7 +441,7 @@ func restoreFile(fd *FileData, cm *CMgr, resDir string, merge, verifyOnly, dryRu
 		return true, nil
 	}
 	tp := p + RESTORE_TEMP_SUFFIX
-	err := restoreFileToTemp(fd, cm, tp, verifyOnly, secret)
+	err := restoreFileToTemp(fd, cm, mem, tp, verifyOnly, secret)
 	if err == nil {
 		if verifyOnly {
 			return true, nil
@@ -588,9 +591,9 @@ func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose
 	var fds []*FileData
 	var wg sync.WaitGroup
 	var mu sync.Mutex // protect fds and stats
-	ch := make(chan int, maxDop)
+	ch := make(chan *chunkMem, maxDop)
 	for i := 0; i < maxDop; i++ {
-		ch <- 1
+		ch <- makeChunkMem(int(cfg.ChunkSize))
 	}
 	for _, n := range comb {
 		if n == last {
@@ -600,9 +603,9 @@ func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose
 		wg.Add(1)
 		go func(name string) {
 			defer wg.Done()
-			<-ch
-			defer func() { ch <- 1 }()
-			new_fd, err := backupOneNode(cm, cfg.ChunkSize, dryRun, force, verbose, vfdm.files[name], sfdm.files[name], cfg.FPSecret, &mu, stats)
+			mem := <-ch
+			defer func() { ch <- mem }()
+			new_fd, err := backupOneNode(cm, mem, dryRun, force, verbose, vfdm.files[name], sfdm.files[name], cfg.FPSecret, &mu, stats)
 			if err == nil && new_fd != nil {
 				mu.Lock()
 				fds = append(fds, new_fd)
@@ -611,6 +614,10 @@ func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose
 		}(n)
 	}
 	wg.Wait()
+	for i := 0; i < maxDop; i++ {
+		<-ch
+	}
+	ch = nil
 	if !dryRun {
 		if err = vm.SaveFiles(new_version, fds); err != nil {
 			return err
@@ -682,9 +689,9 @@ func Restore(pwFile, repo, resDir, version string, merge, verifyOnly, dryRun, ve
 	}
 	var wg sync.WaitGroup
 	var mu sync.Mutex // protects errs
-	ch := make(chan int, maxDop)
+	ch := make(chan *readChunkMem, maxDop)
 	for i := 0; i < maxDop; i++ {
-		ch <- 1
+		ch <- &readChunkMem{}
 	}
 	for _, name := range names {
 		fd := fdm[name]
@@ -692,9 +699,9 @@ func Restore(pwFile, repo, resDir, version string, merge, verifyOnly, dryRun, ve
 			wg.Add(1)
 			go func(fd *FileData) {
 				defer wg.Done()
-				<-ch
-				defer func() { ch <- 1 }()
-				acted, e := restoreFile(fd, cm, resDir, merge, verifyOnly, dryRun, cfg.FPSecret)
+				mem := <-ch
+				defer func() { ch <- mem }()
+				acted, e := restoreFile(fd, cm, mem, resDir, merge, verifyOnly, dryRun, cfg.FPSecret)
 				if e == nil {
 					if verbose && acted {
 						stdout.Printf("%s\n", fd.PrettyPrint())
@@ -709,6 +716,9 @@ func Restore(pwFile, repo, resDir, version string, merge, verifyOnly, dryRun, ve
 		}
 	}
 	wg.Wait()
+	for i := 0; i < maxDop; i++ {
+		<-ch
+	}
 	if !dryRun && !verifyOnly {
 		for i := len(names) - 1; i >= 0; i-- {
 			fd := fdm[names[i]]
@@ -844,9 +854,9 @@ func VerifyRepo(pwFile, repo string, quick bool, maxDop int, r *VerifyRepoResult
 	totalBadFiles := 0
 	var wg sync.WaitGroup
 	var mu sync.Mutex // protects vr, allOk, allErrors, AllMissing
-	ch := make(chan int, maxDop)
+	ch := make(chan *readChunkMem, maxDop)
 	for i := 0; i < maxDop; i++ {
-		ch <- 1
+		ch <- &readChunkMem{}
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(versions)))
 	for _, v := range versions {
@@ -890,9 +900,9 @@ func VerifyRepo(pwFile, repo string, quick bool, maxDop int, r *VerifyRepoResult
 				wg.Add(1)
 				go func(cc FP) {
 					defer wg.Done()
-					<-ch
-					defer func() { ch <- 1 }()
-					b, err := cm.ReadChunk(cc)
+					mem := <-ch
+					defer func() { ch <- mem }()
+					b, err := cm.ReadChunk(cc, mem)
 					if err == nil && !matchChunkFP(cfg.FPSecret, cc, b) {
 						err = fmt.Errorf("Mismatch fingerpint %s", cc)
 					}
@@ -947,6 +957,9 @@ func VerifyRepo(pwFile, repo string, quick bool, maxDop int, r *VerifyRepoResult
 				stdout.Printf("Version %s : %d bytes, %d chunk(s), %d good, %d bad, %d missing. %d files, %d bad.\n", v, size, vr.Chunks, vr.Ok, vr.Errors, vr.Missing, files, badFiles)
 			}
 		}
+	}
+	for i := 0; i < maxDop; i++ {
+		<-ch
 	}
 	allChunks := cm.GetAllChunks()
 	r.Chunks = len(allChunks)

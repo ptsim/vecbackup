@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"sync"
 )
@@ -67,10 +66,15 @@ func (cm *CMgr) FindChunk(fp FP) bool {
 	return ok
 }
 
-func (cm *CMgr) ReadChunk(fp FP) ([]byte, error) {
+type readChunkMem struct {
+	temp  bytes.Buffer
+	temp2 bytes.Buffer
+}
+
+func (cm *CMgr) ReadChunk(fp FP, mem *readChunkMem) ([]byte, error) {
 	name := FPtoName(fp)
 	f := cm.sm.JoinPath(cm.sm.JoinPath(cm.dir, name[:DIR_PREFIX_SIZE]), name)
-	ciphertext, err := cm.sm.ReadFile(f)
+	ciphertext, err := cm.sm.ReadFile(f, &mem.temp, &mem.temp2)
 	if err != nil {
 		return nil, err
 	}
@@ -83,10 +87,40 @@ func (cm *CMgr) ReadChunk(fp FP) ([]byte, error) {
 	} else {
 		text = ciphertext
 	}
-	return uncompressChunk(text)
+	return uncompressChunk(text, &mem.temp2)
 }
 
-func (cm *CMgr) AddChunk(fp FP, chunk []byte) (bool, int, error) {
+type chunkMem struct {
+	chunkSize    int
+	prefixAndBuf []byte       // 1 byte prefix plus up to chunkSize bytes
+	size         int          // current data is in prefixAndBuf[1:1+size]
+	temp         bytes.Buffer // temporary
+}
+
+func makeChunkMem(chunkSize int) *chunkMem {
+	return &chunkMem{chunkSize: chunkSize, prefixAndBuf: make([]byte, 1+chunkSize), size: chunkSize}
+}
+
+func (mem *chunkMem) setSize(size int) {
+	if size > mem.chunkSize {
+		panic("out of bounds")
+	}
+	mem.size = size
+}
+
+func (mem *chunkMem) buf() []byte {
+	return mem.prefixAndBuf[1 : 1+mem.size]
+}
+
+func (mem *chunkMem) bufWithPrefix() []byte {
+	return mem.prefixAndBuf[:1+mem.size]
+}
+
+func (mem *chunkMem) setPrefix(p byte) {
+	mem.prefixAndBuf[0] = p
+}
+
+func (cm *CMgr) AddChunk(fp FP, mem *chunkMem) (bool, int, error) {
 	cm.mu.Lock()
 	for {
 		_, ok := cm.chunks[fp]
@@ -105,7 +139,7 @@ func (cm *CMgr) AddChunk(fp FP, chunk []byte) (bool, int, error) {
 	cm.mu.Unlock()
 	var ciphertext []byte
 	var err error
-	ciphertext, err = compressChunk(chunk, cm.compress)
+	ciphertext, err = compressChunk(mem, cm.compress)
 	if err != nil {
 		return false, 0, err
 	}
@@ -156,10 +190,10 @@ func (cm *CMgr) GetAllChunks() map[FP]int {
 	return m
 }
 
-func prefixAndCompress(d []byte) ([]byte, error) {
-	var zlibBuf bytes.Buffer
+func prefixAndCompress(d []byte, zlibBuf *bytes.Buffer) ([]byte, error) {
+	zlibBuf.Reset()
 	zlibBuf.WriteByte(byte(CompressionType_ZLIB))
-	zlw := zlib.NewWriter(&zlibBuf)
+	zlw := zlib.NewWriter(zlibBuf)
 	if n, err := zlw.Write(d); err != nil {
 		return nil, err
 	} else if n != len(d) {
@@ -171,18 +205,16 @@ func prefixAndCompress(d []byte) ([]byte, error) {
 	return zlibBuf.Bytes(), nil
 }
 
-func prefixNoCompress(d []byte) ([]byte, error) {
-	return append([]byte{byte(CompressionType_NO_COMPRESSION)}, d...), nil
-}
-
 const PREFIX_CHECK_SIZE = 4096
 
-func compressChunk(text []byte, m CompressionMode) ([]byte, error) {
+func compressChunk(mem *chunkMem, m CompressionMode) ([]byte, error) {
+	text := mem.buf()
+	temp := &mem.temp
 	if m == CompressionMode_AUTO {
 		if len(text) < 128 {
 			m = CompressionMode_NO
 		} else if len(text) < PREFIX_CHECK_SIZE {
-			out, err := prefixAndCompress(text)
+			out, err := prefixAndCompress(text, temp)
 			if err != nil {
 				return nil, err
 			}
@@ -192,7 +224,7 @@ func compressChunk(text []byte, m CompressionMode) ([]byte, error) {
 			m = CompressionMode_NO
 		} else {
 			test := text[:PREFIX_CHECK_SIZE]
-			out, err := prefixAndCompress(test)
+			out, err := prefixAndCompress(test, temp)
 			if err != nil {
 				return nil, err
 			}
@@ -204,7 +236,7 @@ func compressChunk(text []byte, m CompressionMode) ([]byte, error) {
 		}
 	}
 	if m == CompressionMode_SLOW {
-		out, err := prefixAndCompress(text)
+		out, err := prefixAndCompress(text, temp)
 		if err != nil {
 			return nil, err
 		}
@@ -214,12 +246,13 @@ func compressChunk(text []byte, m CompressionMode) ([]byte, error) {
 		m = CompressionMode_NO
 	}
 	if m == CompressionMode_NO {
-		return prefixNoCompress(text)
+		mem.setPrefix(byte(CompressionType_NO_COMPRESSION))
+		return mem.bufWithPrefix(), nil
 	}
-	return prefixAndCompress(text)
+	return prefixAndCompress(text, temp)
 }
 
-func uncompressChunk(zlibText []byte) ([]byte, error) {
+func uncompressChunk(zlibText []byte, buf *bytes.Buffer) ([]byte, error) {
 	if zlibText[0] == 0 {
 		return zlibText[1:], nil
 	} else if zlibText[0] != 1 {
@@ -227,7 +260,9 @@ func uncompressChunk(zlibText []byte) ([]byte, error) {
 	}
 	if zlr, err := zlib.NewReader(bytes.NewBuffer(zlibText[1:])); err == nil {
 		defer zlr.Close()
-		return ioutil.ReadAll(zlr)
+		buf.Reset()
+		_, err := buf.ReadFrom(zlr)
+		return buf.Bytes(), err
 	} else {
 		return nil, err
 	}

@@ -129,7 +129,7 @@ func decodeConfig(data []byte) (*EncConfigProto, error) {
 }
 
 func GetConfig(pwFile string, sm StorageMgr, repo string) (*Config, error) {
-	b, err := sm.ReadFile(sm.JoinPath(repo, CONFIG_FILE))
+	b, err := sm.ReadFile(sm.JoinPath(repo, CONFIG_FILE), &bytes.Buffer{}, &bytes.Buffer{})
 	if err != nil {
 		return nil, err
 	}

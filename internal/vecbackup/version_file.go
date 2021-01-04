@@ -293,7 +293,7 @@ func ReadNodeDataProto(r *bufio.Reader) (*NodeDataProto, error) {
 
 func (vm *VMgr) LoadFiles(v string) ([]*FileData, error, int) {
 	fp := vm.sm.JoinPath(vm.dir, VERSION_FILENAME_PREFIX+v)
-	ciphertext, err := vm.sm.ReadFile(fp)
+	ciphertext, err := vm.sm.ReadFile(fp, &bytes.Buffer{}, &bytes.Buffer{})
 	if err != nil {
 		return nil, err, 0
 	}
