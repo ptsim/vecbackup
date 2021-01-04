@@ -196,7 +196,7 @@ func (sm rcloneSMgr) WriteFile(p string, d []byte) error {
 
 func (sm localSMgr) WriteFile(p string, d []byte) error {
 	tp := p + "-temp"
-	out, err := os.OpenFile(tp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, DEFAULT_FILE_PERM)
+	out, err := os.OpenFile(tp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, DEFAULT_FILE_PERM)
 	if err != nil {
 		return err
 	}

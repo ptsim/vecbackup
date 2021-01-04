@@ -122,6 +122,9 @@ func (cm *CMgr) AddChunk(fp FP, chunk []byte) (bool, int, error) {
 		return false, 0, err
 	}
 	err = cm.sm.WriteFile(f, ciphertext)
+	if err != nil {
+		return false, 0, err
+	}
 	compressedLen := len(ciphertext)
 	cm.mu.Lock()
 	cm.chunks[fp] = 0
