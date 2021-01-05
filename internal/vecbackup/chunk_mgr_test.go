@@ -20,10 +20,7 @@ func testCMhelper(t *testing.T, key *EncKey) {
 	removeAll(t, REPO)
 	defer removeAll(t, REPO)
 	sm, repo2 := GetStorageMgr(REPO)
-	cm, err := MakeCMgr(sm, repo2, key, CompressionMode_YES)
-	if err != nil {
-		t.Fatalf("Can't create chunk manager: %s", err)
-	}
+	cm := MakeCMgr(sm, repo2, key, CompressionMode_YES)
 	N := 100000
 	mem := makeAddChunkMem(N)
 	data := mem.buf()
@@ -34,11 +31,11 @@ func testCMhelper(t *testing.T, key *EncKey) {
 		text := data[:]
 		var fp FP = sha512.Sum512_256(text)
 		mem.setSize(len(text))
-		_, _, err := cm.AddChunk(fp, mem)
+		added, _, err := cm.AddChunk(fp, mem)
 		if err != nil {
 			t.Fatalf("AddChunk failed: %s %s", fp, err)
 		}
-		t.Logf("Added chunk %s\n", fp)
+		t.Logf("Added chunk %s added %v\n", fp, added)
 		names = append(names, fp)
 	}
 	mem2 := &readChunkMem{}

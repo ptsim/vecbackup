@@ -6,18 +6,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 )
-
-type ChunkMap map[FP]int
 
 type CMgr struct {
 	sm       StorageMgr
 	dir      string
 	key      *EncKey
 	compress CompressionMode
-	chunks   ChunkMap
+	memoize  map[FP]bool
 	pending  map[FP]bool
 	mu       sync.Mutex
 	cond     *sync.Cond
@@ -39,31 +36,33 @@ func nameToFP(name string) (FP, error) {
 	return fp, nil
 }
 
-func MakeCMgr(sm StorageMgr, repo string, key *EncKey, compress CompressionMode) (*CMgr, error) {
+func MakeCMgr(sm StorageMgr, repo string, key *EncKey, compress CompressionMode) *CMgr {
 	cm := &CMgr{sm: sm, dir: sm.JoinPath(repo, CHUNK_DIR), key: key, compress: compress}
-	cm.mu.Lock()
 	cm.cond = sync.NewCond(&cm.mu)
-	cm.chunks = make(map[FP]int)
 	cm.pending = make(map[FP]bool)
-	err := cm.sm.LsDir2(cm.dir, func(d, f string) {
-		if d == f[:DIR_PREFIX_SIZE] {
-			if fp, err := nameToFP(f); err == nil {
-				cm.chunks[fp] = 0
-			}
-		}
-	})
-	cm.mu.Unlock()
-	if err != nil && !os.IsNotExist(err) {
-		return nil, err
-	}
-	return cm, nil
+	cm.memoize = make(map[FP]bool)
+	return cm
 }
 
 func (cm *CMgr) FindChunk(fp FP) bool {
 	cm.mu.Lock()
-	_, ok := cm.chunks[fp]
+	exist, ok := cm.memoize[fp]
+	cm.mu.Unlock() // race condition. For common case performance. Doesn't affect correctness.
+	if ok {
+		return exist
+	}
+	name := FPtoName(fp)
+	f := cm.sm.JoinPath(cm.sm.JoinPath(cm.dir, name[:DIR_PREFIX_SIZE]), name)
+	if exist, err := cm.sm.FileExists(f); err == nil && exist {
+		cm.mu.Lock()
+		cm.memoize[fp] = true
+		cm.mu.Unlock()
+		return true
+	}
+	cm.mu.Lock()
+	cm.memoize[fp] = false
 	cm.mu.Unlock()
-	return ok
+	return false
 }
 
 type readChunkMem struct {
@@ -125,10 +124,13 @@ func (mem *addChunkMem) setPrefix(p byte) {
 }
 
 func (cm *CMgr) AddChunk(fp FP, mem *addChunkMem) (bool, int, error) {
+	if cm.FindChunk(fp) { // race condition. For common case performance. Doesn't affect correctness.
+		return true, 0, nil
+	}
 	cm.mu.Lock()
 	for {
-		_, ok := cm.chunks[fp]
-		if ok {
+		exist, ok := cm.memoize[fp]
+		if ok && exist {
 			cm.mu.Unlock()
 			return true, 0, nil
 		}
@@ -166,7 +168,7 @@ func (cm *CMgr) AddChunk(fp FP, mem *addChunkMem) (bool, int, error) {
 	}
 	compressedLen := len(ciphertext)
 	cm.mu.Lock()
-	cm.chunks[fp] = 0
+	cm.memoize[fp] = true
 	delete(cm.pending, fp)
 	cm.cond.Broadcast()
 	cm.mu.Unlock()
@@ -179,19 +181,30 @@ func (cm *CMgr) DeleteChunk(fp FP) error {
 	err := cm.sm.DeleteFile(p)
 	if err == nil {
 		cm.mu.Lock()
-		delete(cm.chunks, fp)
+		cm.memoize[fp] = false
 		cm.mu.Unlock()
 	}
 	return err
 }
 
-func (cm *CMgr) GetAllChunks() map[FP]int {
-	cm.mu.Lock()
-	m := make(map[FP]int)
-	for k, v := range cm.chunks {
-		m[k] = v
+func (cm *CMgr) CacheChunkInfo() {
+	if cm.sm.IsDirFast() {
+		cm.GetAllChunks()
 	}
-	cm.mu.Unlock()
+}
+
+func (cm *CMgr) GetAllChunks() map[FP]bool {
+	m := make(map[FP]bool)
+	cm.sm.LsDir2(cm.dir, func(d, f string) {
+		if d == f[:DIR_PREFIX_SIZE] {
+			if fp, err := nameToFP(f); err == nil {
+				cm.mu.Lock()
+				cm.memoize[fp] = true
+				m[fp] = true
+				cm.mu.Unlock()
+			}
+		}
+	})
 	return m
 }
 

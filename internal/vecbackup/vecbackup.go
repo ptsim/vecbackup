@@ -470,10 +470,7 @@ func setup(repo string, pwFile string) (*VMgr, *CMgr, *Config, error) {
 		return nil, nil, nil, err
 	}
 	vm := MakeVMgr(sm, repo2, cfg.EncryptionKey)
-	cm, err := MakeCMgr(sm, repo2, cfg.EncryptionKey, cfg.Compress)
-	if err != nil {
-		return nil, nil, nil, err
-	}
+	cm := MakeCMgr(sm, repo2, cfg.EncryptionKey, cfg.Compress)
 	return vm, cm, cfg, nil
 }
 
@@ -566,6 +563,9 @@ func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose
 	if new_version == "" {
 		new_version = CreateNewVersion(last_version)
 	}
+	if verbose {
+		stdout.Println("Scanning sources...")
+	}
 	sfdm, errs := scanSrcs(excludePatterns, srcs)
 	stats.Errors += errs
 	if len(sfdm.names) == 0 {
@@ -587,6 +587,14 @@ func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose
 	}
 	comb := append(append([]string(nil), vfdm.names...), sfdm.names...)
 	sort.Strings(comb)
+	if verbose {
+		if last_version == "" {
+			stdout.Println("Starting inital backup...")
+		} else {
+			stdout.Printf("Starting backup from last version %s ...", last_version)
+		}
+	}
+	cm.CacheChunkInfo()
 	var last string
 	var fds []*FileData
 	var wg sync.WaitGroup
@@ -846,6 +854,7 @@ func VerifyRepo(pwFile, repo string, quick bool, maxDop int, r *VerifyRepoResult
 	if err != nil {
 		return fmt.Errorf("Cannot read version files: %s", err)
 	}
+	allChunks := cm.GetAllChunks()
 	allOk := make(map[FP]bool)
 	allErrors := make(map[FP]bool)
 	allMissing := make(map[FP]bool)
@@ -961,7 +970,6 @@ func VerifyRepo(pwFile, repo string, quick bool, maxDop int, r *VerifyRepoResult
 	for i := 0; i < maxDop; i++ {
 		<-ch
 	}
-	allChunks := cm.GetAllChunks()
 	r.Chunks = len(allChunks)
 	r.Ok = len(allOk)
 	r.Errors = len(allErrors)

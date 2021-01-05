@@ -23,6 +23,7 @@ type StorageMgrLsDir2Func func(dir, file string)
 
 type StorageMgr interface {
 	JoinPath(d, f string) string
+	IsDirFast() bool
 	LsDir(p string) ([]string, error)
 	LsDir2(p string, f StorageMgrLsDir2Func) error
 	FileExists(f string) (bool, error)
@@ -61,6 +62,14 @@ func (sm rcloneSMgr) JoinPath(d, f string) string {
 
 func (sm localSMgr) JoinPath(d, f string) string {
 	return path.Join(d, f)
+}
+
+func (sm rcloneSMgr) IsDirFast() bool {
+	return true
+}
+
+func (sm localSMgr) IsDirFast() bool {
+	return false
 }
 
 func (sm rcloneSMgr) LsDir(p string) ([]string, error) {
