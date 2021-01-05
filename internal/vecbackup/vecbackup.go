@@ -863,6 +863,8 @@ func VerifyRepo(pwFile, repo string, quick bool, maxDop int, r *VerifyRepoResult
 	fail := false
 	totalFiles := 0
 	totalBadFiles := 0
+	totalDirs := 0
+	totalSymlinks := 0
 	var wg sync.WaitGroup
 	var mu sync.Mutex // protects vr, allOk, allErrors, AllMissing
 	ch := make(chan *readChunkMem, maxDop)
@@ -943,31 +945,38 @@ func VerifyRepo(pwFile, repo string, quick bool, maxDop int, r *VerifyRepoResult
 		mu.Unlock()
 		wg.Wait()
 		badFiles := 0
-		files := len(fds)
+		files := 0
+		dirs := 0
+		symlinks := 0
 		for _, fd := range fds {
-			for _, chunk := range fd.Chunks {
-				if allErrors[chunk] || allMissing[chunk] {
-					badFiles++
-					stderr.Printf("F %s\n", fd.Name)
-					break
+			if fd.IsFile() {
+				files++
+				for _, chunk := range fd.Chunks {
+					if allErrors[chunk] || allMissing[chunk] {
+						badFiles++
+						stderr.Printf("F %s\n", fd.Name)
+						break
+					}
 				}
+			} else if fd.IsDir() {
+				dirs++
+			} else {
+				symlinks++
 			}
 		}
 		totalFiles += files
 		totalBadFiles += badFiles
-		if quick {
-			if nerrs > 0 {
-				stdout.Printf("Version %s : %d bytes, %d chunk(s), %d missing. %d files, %d bad. %d invalid file info.\n", v, size, vr.Chunks, vr.Missing, files, badFiles, nerrs)
-			} else {
-				stdout.Printf("Version %s : %d bytes, %d chunk(s), %d missing. %d files, %d bad.\n", v, size, vr.Chunks, vr.Missing, files, badFiles)
-			}
-		} else {
-			if nerrs > 0 {
-				stdout.Printf("Version %s : %d bytes, %d chunk(s), %d good, %d bad, %d missing. %d files, %d bad. %d invalid file info.\n", v, size, vr.Chunks, vr.Ok, vr.Errors, vr.Missing, files, badFiles, nerrs)
-			} else {
-				stdout.Printf("Version %s : %d bytes, %d chunk(s), %d good, %d bad, %d missing. %d files, %d bad.\n", v, size, vr.Chunks, vr.Ok, vr.Errors, vr.Missing, files, badFiles)
-			}
+		totalDirs += dirs
+		totalSymlinks += symlinks
+		nerrsMsg := ""
+		if nerrs > 0 {
+			nerrsMsg = fmt.Sprintf(" %d invalid file info.\n", nerrs)
 		}
+		chunkMsg := ""
+		if !quick {
+			chunkMsg = fmt.Sprintf("%d good, %d bad, ", vr.Ok, vr.Errors)
+		}
+		stdout.Printf("Version %s : %d bytes, %d chunk(s), %s%d missing. %d files, %d bad. %d dirs. %d symlinks.%s", v, size, vr.Chunks, chunkMsg, vr.Missing, files, badFiles, dirs, symlinks, nerrsMsg)
 	}
 	for i := 0; i < maxDop; i++ {
 		<-ch
@@ -981,7 +990,11 @@ func VerifyRepo(pwFile, repo string, quick bool, maxDop int, r *VerifyRepoResult
 			r.Unused++
 		}
 	}
-	stdout.Printf("Summary: %d chunk(s), %d good, %d bad, %d missing, %d unused. %d files, %d bad.\n", r.Chunks, r.Ok, r.Errors, r.Missing, r.Unused, totalFiles, totalBadFiles)
+	chunkMsg := ""
+	if !quick {
+		chunkMsg = fmt.Sprintf("%d good, %d bad, ", r.Ok, r.Errors)
+	}
+	stdout.Printf("Summary: %d chunk(s), %s%d missing, %d unused. %d files, %d bad. %d dirs. %d symlinks.\n", r.Chunks, chunkMsg, r.Missing, r.Unused, totalFiles, totalBadFiles, totalDirs, totalSymlinks)
 	if fail || r.Errors > 0 || r.Missing > 0 {
 		return errors.New("Error verifying repo.")
 	}
