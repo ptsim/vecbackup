@@ -181,15 +181,15 @@ func (sm rcloneSMgr) ReadFile(p string, out, errOut *bytes.Buffer) ([]byte, erro
 	return out.Bytes(), nil
 }
 
-func (sm localSMgr) ReadFile(p string, buf, buf2 *bytes.Buffer) ([]byte, error) {
+func (sm localSMgr) ReadFile(p string, out, _ *bytes.Buffer) ([]byte, error) {
 	f, err := os.Open(p)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	buf.Reset()
-	_, err = buf.ReadFrom(f)
-	return buf.Bytes(), err
+	out.Reset()
+	_, err = out.ReadFrom(f)
+	return out.Bytes(), err
 }
 
 func (sm rcloneSMgr) WriteFile(p string, d []byte) error {

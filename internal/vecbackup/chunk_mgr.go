@@ -67,14 +67,15 @@ func (cm *CMgr) FindChunk(fp FP) bool {
 }
 
 type readChunkMem struct {
-	temp  bytes.Buffer
-	temp2 bytes.Buffer
+	readBuf bytes.Buffer // for read
+	errBuf  bytes.Buffer // for err
+	compBuf bytes.Buffer // for compression
 }
 
 func (cm *CMgr) ReadChunk(fp FP, mem *readChunkMem) ([]byte, error) {
 	name := FPtoName(fp)
 	f := cm.sm.JoinPath(cm.sm.JoinPath(cm.dir, name[:DIR_PREFIX_SIZE]), name)
-	ciphertext, err := cm.sm.ReadFile(f, &mem.temp, &mem.temp2)
+	ciphertext, err := cm.sm.ReadFile(f, &mem.readBuf, &mem.errBuf)
 	if err != nil {
 		return nil, err
 	}
@@ -87,14 +88,14 @@ func (cm *CMgr) ReadChunk(fp FP, mem *readChunkMem) ([]byte, error) {
 	} else {
 		text = ciphertext
 	}
-	return uncompressChunk(text, &mem.temp2)
+	return uncompressChunk(text, &mem.compBuf)
 }
 
 type addChunkMem struct {
 	chunkSize    int
 	prefixAndBuf []byte       // 1 byte prefix plus up to chunkSize bytes
 	size         int          // current data is in prefixAndBuf[1:1+size]
-	temp         bytes.Buffer // temporary
+	compBuf      bytes.Buffer // for compression
 }
 
 func makeAddChunkMem(chunkSize int) *addChunkMem {
@@ -209,12 +210,11 @@ const PREFIX_CHECK_SIZE = 4096
 
 func compressChunk(mem *addChunkMem, m CompressionMode) ([]byte, error) {
 	text := mem.buf()
-	temp := &mem.temp
 	if m == CompressionMode_AUTO {
 		if len(text) < 128 {
 			m = CompressionMode_NO
 		} else if len(text) < PREFIX_CHECK_SIZE {
-			out, err := prefixAndCompress(text, temp)
+			out, err := prefixAndCompress(text, &mem.compBuf)
 			if err != nil {
 				return nil, err
 			}
@@ -224,7 +224,7 @@ func compressChunk(mem *addChunkMem, m CompressionMode) ([]byte, error) {
 			m = CompressionMode_NO
 		} else {
 			test := text[:PREFIX_CHECK_SIZE]
-			out, err := prefixAndCompress(test, temp)
+			out, err := prefixAndCompress(test, &mem.compBuf)
 			if err != nil {
 				return nil, err
 			}
@@ -236,7 +236,7 @@ func compressChunk(mem *addChunkMem, m CompressionMode) ([]byte, error) {
 		}
 	}
 	if m == CompressionMode_SLOW {
-		out, err := prefixAndCompress(text, temp)
+		out, err := prefixAndCompress(text, &mem.compBuf)
 		if err != nil {
 			return nil, err
 		}
@@ -249,13 +249,13 @@ func compressChunk(mem *addChunkMem, m CompressionMode) ([]byte, error) {
 		mem.setPrefix(byte(CompressionType_NO_COMPRESSION))
 		return mem.bufWithPrefix(), nil
 	}
-	return prefixAndCompress(text, temp)
+	return prefixAndCompress(text, &mem.compBuf)
 }
 
 func uncompressChunk(zlibText []byte, buf *bytes.Buffer) ([]byte, error) {
-	if zlibText[0] == 0 {
+	if zlibText[0] == byte(CompressionType_NO_COMPRESSION) {
 		return zlibText[1:], nil
-	} else if zlibText[0] != 1 {
+	} else if zlibText[0] != byte(CompressionType_ZLIB) {
 		return nil, errors.New("Not encrypted")
 	}
 	if zlr, err := zlib.NewReader(bytes.NewBuffer(zlibText[1:])); err == nil {
