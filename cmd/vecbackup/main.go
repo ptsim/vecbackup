@@ -116,8 +116,6 @@ Common flags:
       -max-dop      maximum degree of parallelism. Default 3. 
                     Minimum 1. Maximum 100. Increasing this number increases
                     memory, cpu, disk and network usage but reduces total time.
-                    Set environment variable GOGC=20 to reduce memory usage when
-                    using a big degree of parallelism.
                     Only used for backup, restore and verify-repo commands.
 
 Remote repository:
