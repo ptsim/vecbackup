@@ -157,14 +157,12 @@ func (vm *VMgr) GetVersions() ([]string, error) {
 
 func (vm *VMgr) DeleteVersion(v string) error {
 	f := VERSION_FILENAME_PREFIX + v
-	exists, err := vm.sm.ExistInDir(vm.dir, f)
-	if err != nil {
+	p := vm.sm.JoinPath(vm.dir, f)
+	if exists, err := vm.sm.FileExists(p); err != nil {
 		return err
-	}
-	if !exists {
+	} else if !exists {
 		return errors.New("Version does not exist")
 	}
-	p := vm.sm.JoinPath(vm.dir, f)
 	return vm.sm.DeleteFile(p)
 }
 

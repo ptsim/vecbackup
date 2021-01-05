@@ -26,7 +26,6 @@ type StorageMgr interface {
 	LsDir(p string) ([]string, error)
 	LsDir2(p string, f StorageMgrLsDir2Func) error
 	FileExists(f string) (bool, error)
-	ExistInDir(d, f string) (bool, error)
 	MkdirAll(p string) error
 	ReadFile(p string, out, errOut *bytes.Buffer) ([]byte, error)
 	WriteFile(p string, d []byte) error
@@ -167,29 +166,6 @@ func (sm rcloneSMgr) FileExists(f string) (bool, error) {
 
 func (sm localSMgr) FileExists(f string) (bool, error) {
 	_, err := os.Lstat(f)
-	if err == nil {
-		return true, nil
-	} else if os.IsNotExist(err) {
-		return false, nil
-	}
-	return false, err
-}
-
-func (sm rcloneSMgr) ExistInDir(d, f string) (bool, error) {
-	files, err := TheRcloneSMgr.LsDir(d)
-	if err != nil {
-		return false, err
-	}
-	for _, x := range files {
-		if x == f {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func (sm localSMgr) ExistInDir(d, f string) (bool, error) {
-	_, err := os.Lstat(path.Join(d, f))
 	if err == nil {
 		return true, nil
 	} else if os.IsNotExist(err) {

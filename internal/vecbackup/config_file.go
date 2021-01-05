@@ -67,12 +67,12 @@ func writeEncConfig(sm StorageMgr, d, p string, t EncType, iterations int64, sal
 	if err != nil {
 		return err
 	}
-	if exists, err := sm.ExistInDir(d, p); exists {
-		return fmt.Errorf("Config file already exists in repo: %s", d)
-	} else if err != nil {
-		return err
-	}
 	fp := sm.JoinPath(d, p)
+	if exists, err := sm.FileExists(fp); err != nil {
+		return err
+	} else if exists {
+		return fmt.Errorf("Config file already exists in repo: %s", d)
+	}
 	var buf bytes.Buffer
 	buf.Write([]byte(VC_MAGIC))
 	buf.Write(pb)
