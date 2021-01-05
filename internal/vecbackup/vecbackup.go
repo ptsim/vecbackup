@@ -527,6 +527,10 @@ func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose
 	if len(srcs) == 0 {
 		return errors.New("At least one backup src must be specified")
 	}
+	vm, cm, cfg, err := setup(repo, pwFile)
+	if err != nil {
+		return err
+	}
 	var sml StorageMgr
 	var lockFile2 string
 	if lockFile == "" {
@@ -537,20 +541,16 @@ func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose
 	} else {
 		sml, lockFile2 = GetStorageMgr(lockFile)
 	}
-	if err := sml.WriteLockFile(lockFile2); os.IsExist(err) {
+	excludePatterns, err := readExcludeFile(excludeFrom)
+	if err != nil {
+		return fmt.Errorf("Cannot read exclude-from file: %s", err)
+	}
+	if err = sml.WriteLockFile(lockFile2); os.IsExist(err) {
 		return fmt.Errorf("Repository is locked. Lock file %s exists.", lockFile)
 	} else if err != nil {
 		return err
 	}
 	defer sml.RemoveLockFile(lockFile2)
-	vm, cm, cfg, err := setup(repo, pwFile)
-	if err != nil {
-		return err
-	}
-	excludePatterns, err := readExcludeFile(excludeFrom)
-	if err != nil {
-		return fmt.Errorf("Cannot read exclude-from file: %s", err)
-	}
 	var new_version string
 	if setVersion != "" {
 		if _, ok := DecodeVersionTime(setVersion); ok {
@@ -1049,5 +1049,9 @@ func RemoveLock(repo, lockFile string) error {
 	} else {
 		sml, lockFile2 = GetStorageMgr(lockFile)
 	}
-	return sml.RemoveLockFile(lockFile2)
+	err := sml.RemoveLockFile(lockFile2)
+	if os.IsNotExist(err) {
+		return fmt.Errorf("Repo is not locked. Lock file %s does not exist", lockFile2)
+	}
+	return nil
 }

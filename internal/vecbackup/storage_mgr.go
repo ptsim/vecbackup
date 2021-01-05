@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path"
@@ -24,6 +25,7 @@ type StorageMgr interface {
 	JoinPath(d, f string) string
 	LsDir(p string) ([]string, error)
 	LsDir2(p string, f StorageMgrLsDir2Func) error
+	FileExists(f string) (bool, error)
 	ExistInDir(d, f string) (bool, error)
 	MkdirAll(p string) error
 	ReadFile(p string, out, errOut *bytes.Buffer) ([]byte, error)
@@ -141,6 +143,38 @@ func (sm localSMgr) LsDir2(p string, f StorageMgrLsDir2Func) error {
 	return nil
 }
 
+func (sm rcloneSMgr) FileExists(f string) (bool, error) {
+	filename := path.Base(f)
+	if filename == "/" || filename == "." {
+		return false, fmt.Errorf("Invalid path: %s", f)
+	}
+	catCmd := exec.Command(rcloneBinary, "lsjson", "--no-modtime", "--no-mimetype", "--fast-list", "--max-depth", "1", "--files-only", f)
+	catOut, err := catCmd.Output()
+	if err != nil {
+		return false, err
+	}
+	var recs []rcloneLsRecord
+	if err := json.Unmarshal(catOut, &recs); err != nil {
+		return false, err
+	}
+	for _, r := range recs {
+		if r.Path == filename {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (sm localSMgr) FileExists(f string) (bool, error) {
+	_, err := os.Lstat(f)
+	if err == nil {
+		return true, nil
+	} else if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
+}
+
 func (sm rcloneSMgr) ExistInDir(d, f string) (bool, error) {
 	files, err := TheRcloneSMgr.LsDir(d)
 	if err != nil {
@@ -245,22 +279,37 @@ func (sm localSMgr) DeleteFile(p string) error {
 }
 
 func (sm rcloneSMgr) WriteLockFile(p string) error {
-	d := time.Now().UTC().Format(time.RFC3339Nano) + "\n"
-	tp := p + "/tmp-lock"
-	err := TheRcloneSMgr.WriteFile(tp, []byte(d))
+	exists, err := TheRcloneSMgr.FileExists(p)
 	if err != nil {
+		return err
+	}
+	if exists {
 		return os.ErrExist
 	}
-	cmd := exec.Command(rcloneBinary, "moveto", tp, p)
-	err = cmd.Run()
+	d := []byte(fmt.Sprintf("%s\n%d\n", time.Now().UTC().Format(time.RFC3339Nano), rand.Int63()))
+	err = TheRcloneSMgr.WriteFile(p, []byte(d))
 	if err != nil {
-		fmt.Print("MOVE ERROR", err)
+		return err
+	}
+	var buf, buf2 bytes.Buffer
+	d2, err := TheRcloneSMgr.ReadFile(p, &buf, &buf2)
+	if err != nil {
+		return err
+	}
+	if bytes.Compare(d, d2) != 0 {
 		return os.ErrExist
 	}
 	return nil
 }
 
 func (sm localSMgr) WriteLockFile(p string) error {
+	exists, err := TheLocalSMgr.FileExists(p)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return os.ErrExist
+	}
 	lockFile, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, DEFAULT_FILE_PERM)
 	if err != nil {
 		return err
@@ -270,8 +319,13 @@ func (sm localSMgr) WriteLockFile(p string) error {
 }
 
 func (sm rcloneSMgr) RemoveLockFile(p string) error {
+	exists, err := TheRcloneSMgr.FileExists(p)
+	if err != nil {
+		return err
+	} else if !exists {
+		return os.ErrNotExist
+	}
 	TheRcloneSMgr.DeleteFile(p)
-	TheRcloneSMgr.DeleteFile(p + "/tmp-lock")
 	return nil
 }
 
