@@ -7,6 +7,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"io"
 	"io/ioutil"
+	"os"
 )
 
 type Config struct {
@@ -131,6 +132,9 @@ func decodeConfig(data []byte) (*EncConfigProto, error) {
 func GetConfig(pwFile string, sm StorageMgr, repo string) (*Config, error) {
 	b, err := sm.ReadFile(sm.JoinPath(repo, CONFIG_FILE), &bytes.Buffer{}, &bytes.Buffer{})
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("Repo config is not found in %s. Is this a repo?", repo)
+		}
 		return nil, err
 	}
 	ec, err := decodeConfig(b)
