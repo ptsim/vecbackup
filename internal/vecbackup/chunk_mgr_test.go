@@ -25,7 +25,7 @@ func testCMhelper(t *testing.T, key *EncKey) {
 		t.Fatalf("Can't create chunk manager: %s", err)
 	}
 	N := 100000
-	mem := makeChunkMem(N)
+	mem := makeAddChunkMem(N)
 	data := mem.buf()
 	rand.Seed(1)
 	rand.Read(data)

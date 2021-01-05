@@ -90,37 +90,37 @@ func (cm *CMgr) ReadChunk(fp FP, mem *readChunkMem) ([]byte, error) {
 	return uncompressChunk(text, &mem.temp2)
 }
 
-type chunkMem struct {
+type addChunkMem struct {
 	chunkSize    int
 	prefixAndBuf []byte       // 1 byte prefix plus up to chunkSize bytes
 	size         int          // current data is in prefixAndBuf[1:1+size]
 	temp         bytes.Buffer // temporary
 }
 
-func makeChunkMem(chunkSize int) *chunkMem {
-	return &chunkMem{chunkSize: chunkSize, prefixAndBuf: make([]byte, 1+chunkSize), size: chunkSize}
+func makeAddChunkMem(chunkSize int) *addChunkMem {
+	return &addChunkMem{chunkSize: chunkSize, prefixAndBuf: make([]byte, 1+chunkSize), size: chunkSize}
 }
 
-func (mem *chunkMem) setSize(size int) {
+func (mem *addChunkMem) setSize(size int) {
 	if size > mem.chunkSize {
 		panic("out of bounds")
 	}
 	mem.size = size
 }
 
-func (mem *chunkMem) buf() []byte {
+func (mem *addChunkMem) buf() []byte {
 	return mem.prefixAndBuf[1 : 1+mem.size]
 }
 
-func (mem *chunkMem) bufWithPrefix() []byte {
+func (mem *addChunkMem) bufWithPrefix() []byte {
 	return mem.prefixAndBuf[:1+mem.size]
 }
 
-func (mem *chunkMem) setPrefix(p byte) {
+func (mem *addChunkMem) setPrefix(p byte) {
 	mem.prefixAndBuf[0] = p
 }
 
-func (cm *CMgr) AddChunk(fp FP, mem *chunkMem) (bool, int, error) {
+func (cm *CMgr) AddChunk(fp FP, mem *addChunkMem) (bool, int, error) {
 	cm.mu.Lock()
 	for {
 		_, ok := cm.chunks[fp]
@@ -207,7 +207,7 @@ func prefixAndCompress(d []byte, zlibBuf *bytes.Buffer) ([]byte, error) {
 
 const PREFIX_CHECK_SIZE = 4096
 
-func compressChunk(mem *chunkMem, m CompressionMode) ([]byte, error) {
+func compressChunk(mem *addChunkMem, m CompressionMode) ([]byte, error) {
 	text := mem.buf()
 	temp := &mem.temp
 	if m == CompressionMode_AUTO {

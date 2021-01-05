@@ -188,7 +188,7 @@ func statsRemoveFile(fd *FileData, stats *BackupStats) {
 	}
 }
 
-func backupOneNode(cm *CMgr, mem *chunkMem, dryRun, force, verbose bool, old *FileData, new *FileData, secret []byte, mu *sync.Mutex, stats *BackupStats) (*FileData, error) {
+func backupOneNode(cm *CMgr, mem *addChunkMem, dryRun, force, verbose bool, old *FileData, new *FileData, secret []byte, mu *sync.Mutex, stats *BackupStats) (*FileData, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	if old != nil && new == nil {
@@ -269,7 +269,7 @@ func backupOneNode(cm *CMgr, mem *chunkMem, dryRun, force, verbose bool, old *Fi
 	return to_add, nil
 }
 
-func addChunks(fd *FileData, cm *CMgr, mem *chunkMem, dryRun bool, secret []byte) (int64, int64, error) {
+func addChunks(fd *FileData, cm *CMgr, mem *addChunkMem, dryRun bool, secret []byte) (int64, int64, error) {
 	h := sha512.New512_256()
 	var chunks []FP = nil
 	var sizes []int32
@@ -591,9 +591,9 @@ func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose
 	var fds []*FileData
 	var wg sync.WaitGroup
 	var mu sync.Mutex // protect fds and stats
-	ch := make(chan *chunkMem, maxDop)
+	ch := make(chan *addChunkMem, maxDop)
 	for i := 0; i < maxDop; i++ {
-		ch <- makeChunkMem(int(cfg.ChunkSize))
+		ch <- makeAddChunkMem(int(cfg.ChunkSize))
 	}
 	for _, n := range comb {
 		if n == last {
