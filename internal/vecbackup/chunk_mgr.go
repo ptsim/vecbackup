@@ -70,6 +70,7 @@ type readChunkMem struct {
 	readBuf bytes.Buffer // for read
 	errBuf  bytes.Buffer // for err
 	compBuf bytes.Buffer // for compression
+	encBuf  []byte       // for decryption
 }
 
 func (cm *CMgr) ReadChunk(fp FP, mem *readChunkMem) ([]byte, error) {
@@ -81,10 +82,11 @@ func (cm *CMgr) ReadChunk(fp FP, mem *readChunkMem) ([]byte, error) {
 	}
 	var text []byte
 	if cm.key != nil {
-		text, err = decryptBytes(cm.key, ciphertext)
+		text, err = decryptBytes(cm.key, ciphertext, mem.encBuf)
 		if err != nil {
 			return nil, err
 		}
+		mem.encBuf = text
 	} else {
 		text = ciphertext
 	}
@@ -96,6 +98,7 @@ type addChunkMem struct {
 	prefixAndBuf []byte       // 1 byte prefix plus up to chunkSize bytes
 	size         int          // current data is in prefixAndBuf[1:1+size]
 	compBuf      bytes.Buffer // for compression
+	encBuf       []byte       // for encryption
 }
 
 func makeAddChunkMem(chunkSize int) *addChunkMem {
@@ -145,11 +148,12 @@ func (cm *CMgr) AddChunk(fp FP, mem *addChunkMem) (bool, int, error) {
 		return false, 0, err
 	}
 	if cm.key != nil {
-		ciphertext, err = encryptBytes(cm.key, ciphertext)
+		ciphertext, err = encryptBytes(cm.key, ciphertext, mem.encBuf)
 		if err != nil {
 			return false, 0, err
 		}
 	}
+	mem.encBuf = ciphertext
 	name := FPtoName(fp)
 	dir := cm.sm.JoinPath(cm.dir, name[:DIR_PREFIX_SIZE])
 	f := cm.sm.JoinPath(dir, name)

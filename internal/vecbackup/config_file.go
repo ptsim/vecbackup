@@ -101,7 +101,7 @@ func WriteNewConfig(pwFile string, sm StorageMgr, repo string, rounds int, cfg *
 	if err != nil {
 		return err
 	}
-	enc, err := encryptBytes(masterKey, configBytes)
+	enc, err := encryptBytes(masterKey, configBytes, nil)
 	if err != nil {
 		return err
 	}
@@ -153,7 +153,7 @@ func GetConfig(pwFile string, sm StorageMgr, repo string) (*Config, error) {
 		return nil, fmt.Errorf("Cannot read pw file: %s", err)
 	}
 	masterKey := getMasterKey(pw, ec.Salt, int(ec.Iterations))
-	configBytes, err := decryptBytes(masterKey, ec.Config)
+	configBytes, err := decryptBytes(masterKey, ec.Config, nil)
 	if err != nil {
 		return nil, errors.New("Wrong password")
 	}

@@ -301,7 +301,7 @@ func (vm *VMgr) LoadFiles(v string) ([]*FileData, error, int) {
 	if vm.key == nil {
 		text = ciphertext
 	} else {
-		text, err = decryptBytes(vm.key, ciphertext)
+		text, err = decryptBytes(vm.key, ciphertext, nil)
 	}
 	br, err := DecodeVersionFile(bytes.NewReader(text))
 	if err != nil {
@@ -353,7 +353,7 @@ func (vm *VMgr) SaveFiles(version string, fds []*FileData) error {
 		result = buf.Bytes()
 	} else {
 		var err error
-		if result, err = encryptBytes(vm.key, buf.Bytes()); err != nil {
+		if result, err = encryptBytes(vm.key, buf.Bytes(), nil); err != nil {
 			return err
 		}
 	}

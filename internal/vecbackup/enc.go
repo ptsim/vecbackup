@@ -16,27 +16,28 @@ func (key EncKey) String() string {
 	return fmt.Sprintf("Key-%x", []byte(key[:]))
 }
 
-func encryptBytes(key *EncKey, text []byte) ([]byte, error) {
-	// from golang secretbox example
-	// You must use a different nonce for each message you encrypt with the
-	// same key. Since the nonce here is 192 bits long, a random value
-	// provides a sufficiently small probability of repeats.
+func encryptBytes(key *EncKey, text []byte, out []byte) ([]byte, error) {
 	var nonce [24]byte
 	if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
 		return nil, err
 	}
-
-	// This encrypts the text and appends the result to the nonce.
-	encrypted := secretbox.Seal(nonce[:], text, &nonce, (*[32]byte)((key)))
+	total := len(nonce) + len(text) + secretbox.Overhead
+	if cap(out) < len(nonce)+len(text) {
+		out = make([]byte, len(nonce), total)
+	} else {
+		out = out[:len(nonce)]
+	}
+	copy(out, nonce[:])
+	encrypted := secretbox.Seal(out, text, &nonce, (*[32]byte)((key)))
 	return encrypted, nil
 }
 
-func decryptBytes(key *EncKey, encrypted []byte) ([]byte, error) {
+func decryptBytes(key *EncKey, encrypted []byte, out []byte) ([]byte, error) {
 	var nonce [24]byte
 	copy(nonce[:], encrypted[:24])
-	decrypted, ok := secretbox.Open(nil, encrypted[24:], &nonce, (*[32]byte)(key))
+	decrypted, ok := secretbox.Open(out[:0], encrypted[24:], &nonce, (*[32]byte)(key))
 	if !ok {
-		return nil, errors.New("secretbox.Open failed")
+		return nil, errors.New("Unable to decrypt")
 	}
 	return decrypted, nil
 }

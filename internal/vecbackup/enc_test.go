@@ -40,25 +40,25 @@ func TestEncryption(t *testing.T) {
 
 func testEncrypt(t *testing.T, key, plaintext []byte) {
 	var k EncKey = sha512.Sum512_256(key)
-	ciphertext, err := encryptBytes(&k, plaintext)
+	ciphertext, err := encryptBytes(&k, plaintext, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ciphertext2, err := encryptBytes(&k, plaintext)
+	ciphertext2, err := encryptBytes(&k, plaintext, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Compare(ciphertext, ciphertext2) == 0 {
 		t.Fatal("Ciphertext should not be the same")
 	}
-	result, err := decryptBytes(&k, ciphertext)
+	result, err := decryptBytes(&k, ciphertext, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Compare(result, plaintext) != 0 {
 		t.Fatal("Decrypted results does not match plaintext\n")
 	}
-	result2, err := decryptBytes(&k, ciphertext2)
+	result2, err := decryptBytes(&k, ciphertext2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
