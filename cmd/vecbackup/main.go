@@ -14,7 +14,7 @@ func usageAndExit() {
 	fmt.Fprintf(os.Stderr, `Usage:
   vecbackup help
   vecbackup init [-pw <pwfile>] [-chunk-size size] [-pbkdf2-iterations num] -r <repo>
-  vecbackup backup [-v] [-f] [-n] [-version <version>] [-pw <pwfile>] [-exclude-from <file>] [-lock-file <file>] [-max-dop n] -r <repo> <src> [<src> ...]
+  vecbackup backup [-v] [-f] [-n] [-version <version>] [-pw <pwfile>] [-exclude-from <file>] [-lock-file <file>] [-check-chunks] [-max-dop n] -r <repo> <src> [<src> ...]
   vecbackup ls [-version <version>] [-pw <pwfile>] -r <repo>
   vecbackup versions [-pw <pwfile>] -r <repo>
   vecbackup restore [-v] [-n] [-version <version>] [-merge] [-pw <pwfile>] [-verify-only] [-max-dop n] -r <repo> -target <restoredir> [<path> ...]
@@ -46,7 +46,7 @@ func help() {
 
     Initialize a new backup repository.
 
-  vecbackup backup [-v] [-f] [-n] [-version <version>] [-pw <pwfile>] [-exclude-from <file>] [-lock-file <file>] [-max-dop n] -r <repo> <src> [<src> ...]
+  vecbackup backup [-v] [-f] [-n] [-version <version>] [-pw <pwfile>] [-exclude-from <file>] [-lock-file <file>] [-check-chunks] [-max-dop n] -r <repo> <src> [<src> ...]
     Incrementally and recursively backs up one or more <src> to <repo>.
     The files, directories and symbolic links backed up. Other file types are silently ignored.
     Files that have not changed in same size and timestamp are not backed up.
@@ -55,6 +55,7 @@ func help() {
     recommended. It is slow because the second backup is repeating the work of the first.
       -v            verbose, prints the items that are added (+) or removed (-).
       -f            force, always check file contents 
+      -check-chunks check and add missing chunks
       -n            dry run, shows what would have been backed up.
       -version      save as the given version, instead of the current time
       -exclude-from reads list of exclude patterns from specified file
@@ -141,6 +142,7 @@ var memprofile = flag.String("memprofile", "", "write memory profile to file")
 
 var verbose = flag.Bool("v", false, "Verbose")
 var force = flag.Bool("f", false, "Force. Always check file contents.")
+var checkChunks = flag.Bool("check-chunks", false, "Check and add missing chunks.")
 var dryRun = flag.Bool("n", false, "Dry run.")
 var verifyOnly = flag.Bool("verify-only", false, "Verify but don't write.")
 var version = flag.String("version", "", "The version to operate on.")
@@ -201,7 +203,7 @@ func main() {
 		if *maxDop < 1 || *maxDop > 100 {
 			exitIfError(errors.New("-max-dop must be between 1 and 100.\n"))
 		}
-		exitIfError(vecbackup.Backup(*pwFile, *repo, *excludeFrom, *version, *dryRun, *force, *verbose, *lockFile, *maxDop, flag.Args(), &stats))
+		exitIfError(vecbackup.Backup(*pwFile, *repo, *excludeFrom, *version, *dryRun, *force, *checkChunks, *verbose, *lockFile, *maxDop, flag.Args(), &stats))
 		if *dryRun {
 			fmt.Printf("Backup dry run\n%d dir(s) (%d new %d updated %d removed)\n%d file(s) (%d new %d updated %d removed)\n%d symlink(s) (%d new %d updated %d removed)\ntotal src size %d\n%d error(s).\n", stats.Dirs, stats.DirsNew, stats.DirsUpdated, stats.DirsRemoved, stats.Files, stats.FilesNew, stats.FilesUpdated, stats.FilesRemoved, stats.Symlinks, stats.SymlinksNew, stats.SymlinksUpdated, stats.SymlinksRemoved, stats.Size, stats.Errors)
 		} else {

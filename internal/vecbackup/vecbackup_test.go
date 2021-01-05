@@ -31,6 +31,7 @@ var debugFlag = flag.Bool("debug", false, "Debug.")
 var opt struct {
 	Verbose     bool
 	Force       bool
+	CheckChunks bool
 	DryRun      bool
 	VerifyOnly  bool
 	Version     string
@@ -49,6 +50,7 @@ var opt struct {
 func setupTest(t testing.TB, name string) func() {
 	opt.Verbose = false
 	opt.Force = false
+	opt.CheckChunks = true
 	opt.DryRun = false
 	opt.VerifyOnly = false
 	opt.Version = ""
@@ -157,7 +159,7 @@ func (e *TestEnv) backup() {
 	e.failIfError("Getwd", err)
 	e.failIfError("Chdir to srcdir", os.Chdir(SRCDIR))
 	stats := &BackupStats{}
-	e.failIfError("backup", Backup(opt.PwFile, opt.Repo, opt.ExcludeFrom, opt.Version, opt.DryRun, opt.Force, opt.Verbose, opt.LockFile, opt.MaxDop, []string{"."}, stats))
+	e.failIfError("backup", Backup(opt.PwFile, opt.Repo, opt.ExcludeFrom, opt.Version, opt.DryRun, opt.Force, opt.CheckChunks, opt.Verbose, opt.LockFile, opt.MaxDop, []string{"."}, stats))
 	e.failIfError("Chdir to test dir", os.Chdir(wk))
 }
 
@@ -166,7 +168,7 @@ func (e *TestEnv) backupSrcs(srcs []string) {
 	e.failIfError("Getwd", err)
 	e.failIfError("Chdir to srcdir", os.Chdir(SRCDIR))
 	stats := &BackupStats{}
-	e.failIfError("backup", Backup(opt.PwFile, opt.Repo, opt.ExcludeFrom, opt.Version, opt.DryRun, opt.Force, opt.Verbose, opt.LockFile, opt.MaxDop, srcs, stats))
+	e.failIfError("backup", Backup(opt.PwFile, opt.Repo, opt.ExcludeFrom, opt.Version, opt.DryRun, opt.Force, opt.CheckChunks, opt.Verbose, opt.LockFile, opt.MaxDop, srcs, stats))
 	e.failIfError("Chdir to test dir", os.Chdir(wk))
 }
 

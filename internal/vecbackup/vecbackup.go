@@ -188,7 +188,7 @@ func statsRemoveFile(fd *FileData, stats *BackupStats) {
 	}
 }
 
-func backupOneNode(cm *CMgr, mem *addChunkMem, dryRun, force, verbose bool, old *FileData, new *FileData, secret []byte, mu *sync.Mutex, stats *BackupStats) (*FileData, error) {
+func backupOneNode(cm *CMgr, mem *addChunkMem, dryRun, force, checkChunks, verbose bool, old *FileData, new *FileData, secret []byte, mu *sync.Mutex, stats *BackupStats) (*FileData, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	if old != nil && new == nil {
@@ -202,11 +202,13 @@ func backupOneNode(cm *CMgr, mem *addChunkMem, dryRun, force, verbose bool, old 
 	if force || old == nil && new != nil || new.Type != old.Type || (new.IsFile() && (new.Size != old.Size || !new.ModTime.Equal(old.ModTime))) || (new.IsSymlink() && new.Target != old.Target) {
 		to_add = new
 	} else if old.IsFile() {
-		for _, chunk := range old.Chunks {
-			if !cm.FindChunk(chunk) {
-				stderr.Printf("Missing chunk %s from file %s\n", chunk, old.PrettyPrint())
-				to_add = new
-				break
+		if checkChunks {
+			for _, chunk := range old.Chunks {
+				if !cm.FindChunk(chunk) {
+					stderr.Printf("Missing chunk %s from file %s\n", chunk, old.PrettyPrint())
+					to_add = new
+					break
+				}
 			}
 		}
 	}
@@ -517,7 +519,7 @@ type BackupStats struct {
 	RepoAdded       int64
 }
 
-func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose bool, lockFile string, maxDop int, srcs []string, stats *BackupStats) error {
+func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, checkChunks, verbose bool, lockFile string, maxDop int, srcs []string, stats *BackupStats) error {
 	if repo == "" {
 		return errors.New("Backup repository must be specified.")
 	}
@@ -594,7 +596,7 @@ func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose
 			stdout.Printf("Starting backup from last version %s ...", last_version)
 		}
 	}
-	cm.CacheChunkInfo()
+	//cm.CacheChunkInfo()
 	var last string
 	var fds []*FileData
 	var wg sync.WaitGroup
@@ -613,7 +615,7 @@ func Backup(pwFile, repo, excludeFrom, setVersion string, dryRun, force, verbose
 			defer wg.Done()
 			mem := <-ch
 			defer func() { ch <- mem }()
-			new_fd, err := backupOneNode(cm, mem, dryRun, force, verbose, vfdm.files[name], sfdm.files[name], cfg.FPSecret, &mu, stats)
+			new_fd, err := backupOneNode(cm, mem, dryRun, force, checkChunks, verbose, vfdm.files[name], sfdm.files[name], cfg.FPSecret, &mu, stats)
 			if err == nil && new_fd != nil {
 				mu.Lock()
 				fds = append(fds, new_fd)
