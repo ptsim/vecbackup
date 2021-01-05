@@ -199,7 +199,6 @@ You will find the ```vecbackup``` binary in the current directory.
 * By default, the ```backup```, ```restore``` and ```verify-repo``` commands run multiple operations in parallel (multi-threaded).
 * The ```-max-dop``` flag sets the maximum degree of parallellism. The default is 3.
 * If you increase the degree of parallelism, it increases memory, cpu, disk and network utilization.
-* Consider setting the environment variable GOGC=20 to increase Go runtime's garbage collection frequency and reduce the memory used.
 * If ```-max-dop``` is 1, the command will be single threaded.
 * All other commands are always single threaded.
 
