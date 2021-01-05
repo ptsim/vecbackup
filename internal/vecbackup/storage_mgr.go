@@ -197,6 +197,9 @@ func (sm rcloneSMgr) ReadFile(p string, out, errOut *bytes.Buffer) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
+	if len(out.Bytes()) == 0 {
+		return nil, os.ErrNotExist
+	}
 	return out.Bytes(), nil
 }
 
