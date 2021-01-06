@@ -1,0 +1,4 @@
+#!/bin/bash
+go test ./...
+CGO_ENABLED=0 go build -trimpath -ldflags="-buildid=" ./cmd/vecbackup
+
