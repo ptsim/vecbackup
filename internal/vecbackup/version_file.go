@@ -37,7 +37,7 @@ type FileData struct {
 }
 
 //---------------------------------------------------------------------------
-const RFC3339NanoFull = "2006-01-02T15:04:05.000000000Z07:00"
+const RFC3339NanoFull = "2006-01-02T15-04-05.000000000Z07:00"
 
 func DecodeVersionTime(v string) (time.Time, bool) {
 	t, err := time.Parse(RFC3339NanoFull, v)

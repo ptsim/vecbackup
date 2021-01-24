@@ -10,7 +10,6 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -77,9 +76,9 @@ func toExclude(excludePatterns []string, dir, fn string) bool {
 		var matched bool
 		var err error
 		if p[0] == os.PathSeparator {
-			matched, err = filepath.Match(p, filepath.ToSlash(PATH_SEP+path.Join(dir, fn)))
+			matched, err = filepath.Match(p, PATH_SEP+filepath.Join(dir, fn))
 		} else {
-			matched, err = filepath.Match(p, filepath.ToSlash(fn))
+			matched, err = filepath.Match(p, fn)
 		}
 		if err == nil && matched {
 			return true
@@ -132,7 +131,7 @@ func scanOneDir(src string, f os.FileInfo, excludes []string, fdm *fileDataMap) 
 					if toExclude(excludes, src, child.Name()) {
 						continue
 					}
-					errs2 := scanOneDir(path.Join(src, child.Name()), child, excludes, fdm)
+					errs2 := scanOneDir(filepath.Join(src, child.Name()), child, excludes, fdm)
 					errs = errs + errs2
 				}
 				return errs
@@ -387,7 +386,7 @@ func restoreFileToTemp(fd *FileData, cm *CMgr, mem *readChunkMem, fn string, ver
 }
 
 func restoreDir(fd *FileData, resDir string, dryRun bool) (bool, error) {
-	p := path.Join(resDir, fd.Name)
+	p := filepath.Join(resDir, fd.Name)
 	fi, err := os.Lstat(p)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -408,7 +407,7 @@ func restoreDir(fd *FileData, resDir string, dryRun bool) (bool, error) {
 }
 
 func restoreSymlink(fd *FileData, resDir string, dryRun bool) (bool, error) {
-	p := path.Join(resDir, fd.Name)
+	p := filepath.Join(resDir, fd.Name)
 	fi, err := os.Lstat(p)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -433,7 +432,7 @@ func restoreSymlink(fd *FileData, resDir string, dryRun bool) (bool, error) {
 }
 
 func restoreFile(fd *FileData, cm *CMgr, mem *readChunkMem, resDir string, merge, verifyOnly, dryRun bool, secret []byte) (bool, error) {
-	p := path.Join(resDir, fd.Name)
+	p := filepath.Join(resDir, fd.Name)
 	if merge {
 		if fi, err := os.Lstat(p); err == nil && fi.Size() == fd.Size && fi.ModTime().Equal(fd.ModTime) {
 			return false, nil
@@ -733,9 +732,9 @@ func Restore(pwFile, repo, resDir, version string, merge, verifyOnly, dryRun, ve
 		for i := len(names) - 1; i >= 0; i-- {
 			fd := fdm[names[i]]
 			if fd.IsDir() {
-				fi, err := os.Lstat(path.Join(resDir, fd.Name))
+				fi, err := os.Lstat(filepath.Join(resDir, fd.Name))
 				if err != nil || fi.Mode() != fd.Perm {
-					err = os.Chmod(path.Join(resDir, fd.Name), fd.Perm)
+					err = os.Chmod(filepath.Join(resDir, fd.Name), fd.Perm)
 					if err != nil {
 						stderr.Printf("F %s: %s\n", fd.PrettyPrint(), err)
 						errs++
@@ -770,7 +769,15 @@ func Ls(pwFile, repo, version string) error {
 	if err != nil {
 		return fmt.Errorf("Cannot read version file: %s", err)
 	}
+	var names []string
+	fdm := make(map[string]*FileData)
 	for _, fd := range fds {
+		fdm[fd.Name] = fd
+		names = append(names, fd.Name)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		fd := fdm[n]
 		stdout.Printf("%s\n", fd.PrettyPrint())
 	}
 	if errs > 0 {

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -61,7 +62,7 @@ func (sm rcloneSMgr) JoinPath(d, f string) string {
 }
 
 func (sm localSMgr) JoinPath(d, f string) string {
-	return path.Join(d, f)
+	return filepath.Join(d, f)
 }
 
 func (sm rcloneSMgr) IsDirFast() bool {
@@ -138,7 +139,7 @@ func (sm localSMgr) LsDir2(p string, f StorageMgrLsDir2Func) error {
 	}
 	for _, d := range l1 {
 		if d.Mode().IsDir() {
-			l2, err := ioutil.ReadDir(path.Join(p, d.Name()))
+			l2, err := ioutil.ReadDir(filepath.Join(p, d.Name()))
 			if err == nil {
 				for _, x := range l2 {
 					if x.Mode().IsRegular() {

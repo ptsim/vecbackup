@@ -9,7 +9,6 @@ import (
 	"log"
 	"math/rand"
 	"os"
-	"path"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -18,12 +17,11 @@ import (
 	"time"
 )
 
-const (
-	SRCDIR = "/tmp/test_src"
-	REPO   = "/tmp/test_bk"
-	RESDIR = "/tmp/test_res"
-	PWFILE = "/tmp/test_pw"
-)
+var TEMPDIR string
+var SRCDIR string
+var REPO string
+var RESDIR string
+var PWFILE string
 
 var longTest = flag.Bool("longtest", false, "Long test.")
 var debugFlag = flag.Bool("debug", false, "Debug.")
@@ -48,6 +46,15 @@ var opt struct {
 }
 
 func setupTest(t testing.TB, name string) func() {
+	var err error
+	TEMPDIR, err = ioutil.TempDir("", "vecbackuptest-*")
+	if err != nil {
+		t.Fatal("Cannot get tempdir", err)
+	}
+	SRCDIR = filepath.Join(TEMPDIR, "test_src")
+	REPO = filepath.Join(TEMPDIR, "test_bk")
+	RESDIR = filepath.Join(TEMPDIR, "test_res")
+	PWFILE = filepath.Join(TEMPDIR, "test_pw")
 	opt.Verbose = false
 	opt.Force = false
 	opt.CheckChunks = true
@@ -225,7 +232,7 @@ func (e *TestEnv) addFileRepeatedPattern(f string, size, repeat, offset int) {
 }
 
 func (e *TestEnv) addFileWithData(f string, data []byte) {
-	p := path.Join(SRCDIR, f)
+	p := filepath.Join(SRCDIR, f)
 	d := filepath.Dir(p)
 	err := os.MkdirAll(d, 0755)
 	if err != nil {
@@ -243,7 +250,7 @@ func (e *TestEnv) addFileWithData(f string, data []byte) {
 }
 
 func (e *TestEnv) addSymlink(f, target string) {
-	p := path.Join(SRCDIR, f)
+	p := filepath.Join(SRCDIR, f)
 	d := filepath.Dir(p)
 	err := os.MkdirAll(d, 0755)
 	if err != nil {
@@ -256,7 +263,7 @@ func (e *TestEnv) addSymlink(f, target string) {
 }
 
 func (e *TestEnv) addDir(f string) {
-	p := path.Join(SRCDIR, f)
+	p := filepath.Join(SRCDIR, f)
 	err := os.MkdirAll(p, 0755)
 	if err != nil {
 		e.t.Fatalf("mkdirall failed: %s: %s", p, err)
@@ -264,18 +271,18 @@ func (e *TestEnv) addDir(f string) {
 }
 
 func (e *TestEnv) rm(f string) {
-	err := os.Remove(path.Join(SRCDIR, f))
+	err := os.Remove(filepath.Join(SRCDIR, f))
 	if err != nil {
 		e.t.Fatalf("rm failed: %s: %s", f, err)
 	}
 }
 
 func (e *TestEnv) tryrm(f string) {
-	os.Remove(path.Join(SRCDIR, f))
+	os.Remove(filepath.Join(SRCDIR, f))
 }
 
 func (e *TestEnv) rmRes(f string) {
-	err := os.Remove(path.Join(RESDIR, f))
+	err := os.Remove(filepath.Join(RESDIR, f))
 	if err != nil {
 		e.t.Fatalf("rm failed: %s: %s", f, err)
 	}
@@ -309,11 +316,16 @@ func (e *TestEnv) ls(version string) []string {
 
 func (e *TestEnv) filesMatch(version string, l []string) {
 	l2 := e.ls(version)
+	for i, f := range l2 {
+		l2[i] = filepath.ToSlash(f)
+	}
 	sort.Strings(l2)
 	ok := true
 	if len(l) == len(l2) {
 		for i, f := range l {
-			if f != l2[i] {
+			f2 := l2[i]
+			if f != f2 {
+				e.t.Errorf("filesMatch failed: %s %s", f, f2)
 				ok = false
 				break
 			}
@@ -350,7 +362,7 @@ func (e *TestEnv) print(what string) {
 }
 
 func (e *TestEnv) chmod(f string, perm os.FileMode) {
-	p := path.Join(SRCDIR, f)
+	p := filepath.Join(SRCDIR, f)
 	err := os.Chmod(p, os.FileMode(perm))
 	if err != nil {
 		e.t.Fatalf("chmod %v %v failed: %s", f, perm, err)
@@ -364,21 +376,21 @@ func (e *TestEnv) checkSame() {
 }
 
 func (e *TestEnv) checkExistDir(f string) {
-	s, err := os.Stat(path.Join(RESDIR, f))
+	s, err := os.Stat(filepath.Join(RESDIR, f))
 	if err != nil || !s.Mode().IsDir() {
 		e.t.Fatalf("Dir %v does not exist", f)
 	}
 }
 
 func (e *TestEnv) checkExistFile(f string) {
-	s, err := os.Stat(path.Join(RESDIR, f))
+	s, err := os.Stat(filepath.Join(RESDIR, f))
 	if err != nil || !s.Mode().IsRegular() {
 		e.t.Fatalf("File %v does not exist", f)
 	}
 }
 
 func (e *TestEnv) checkNotExist(f string) {
-	_, err := os.Stat(path.Join(RESDIR, f))
+	_, err := os.Stat(filepath.Join(RESDIR, f))
 	if !os.IsNotExist(err) {
 		e.t.Fatalf("%v exists", f)
 	}
@@ -436,8 +448,8 @@ func compareDir(t testing.TB, p1, p2 string) bool {
 			t.Errorf("compareDir file2 is not a file or dir or symlink: %v %v", p2, file2.Mode())
 			return false
 		}
-		c1 := path.Join(p1, file1.Name())
-		c2 := path.Join(p2, file2.Name())
+		c1 := filepath.Join(p1, file1.Name())
+		c2 := filepath.Join(p2, file2.Name())
 		if file1.IsDir() {
 			if file1.Mode().Perm() != file2.Mode().Perm() {
 				t.Errorf("compareDir permissions mismatch: %v %v %v %v", p1, file1.Mode().Perm(), p2, file2.Mode().Perm())
@@ -504,7 +516,7 @@ func walkDir(t testing.TB, p string, out []string) []string {
 		return out
 	}
 	for _, f := range files {
-		fp := path.Join(p, f.Name())
+		fp := filepath.Join(p, f.Name())
 		if f.IsDir() {
 			out = append(out, fp+string(os.PathSeparator))
 			out = walkDir(t, fp, out)
@@ -908,6 +920,9 @@ func TestT13(t *testing.T) {
 		opt.DryRun = true
 		opt.Verbose = true
 		files := e.restore()
+		for i, f := range files {
+			files[i] = filepath.ToSlash(f)
+		}
 		sort.Strings(files)
 		e.checkNotExist("")
 		e.filesMatch("", files)
@@ -915,6 +930,9 @@ func TestT13(t *testing.T) {
 		opt.DryRun = false
 		opt.VerifyOnly = true
 		files = e.restore()
+		for i, f := range files {
+			files[i] = filepath.ToSlash(f)
+		}
 		sort.Strings(files)
 		e.checkNotExist("")
 		e.filesMatch("", files)
@@ -992,7 +1010,7 @@ func TestT15(t *testing.T) {
 		e.checkNotExist("c/c2")
 		e.checkNotExist("c/c3")
 		e.checkNotExist("d/d2/d3")
-		e.restoreFiles([]string{"c/c3"})
+		e.restoreFiles([]string{filepath.FromSlash("c/c3")})
 		e.checkExistFile("a")
 		e.checkExistFile("b")
 		e.checkNotExist("c/c2")
@@ -1051,29 +1069,29 @@ func TestT17(t *testing.T) {
 		e.setPW([]byte("c0-3'[sof[sdjfoasdfoh"))
 		e.init()
 		e.add("a")
-		opt.Version = "2011-02-03T04:05:06.000000000Z"
+		opt.Version = "2011-02-03T04-05-06.000000000Z"
 		e.backup()
 		e.add("b")
-		opt.Version = "2011-02-03T04:01:06.000000000Z"
+		opt.Version = "2011-02-03T04-01-06.000000000Z"
 		e.backup()
 		e.add("c")
-		opt.Version = "2011-02-03T04:09:06.000000000Z"
+		opt.Version = "2011-02-03T04-09-06.000000000Z"
 		e.backup()
 		opt.Version = ""
 		e.clean("res")
-		opt.Version = "2011-02-03T04:01:06.000000000Z"
+		opt.Version = "2011-02-03T04-01-06.000000000Z"
 		e.restore()
 		e.checkExistFile("a")
 		e.checkExistFile("b")
 		e.checkNotExist("c")
 		e.clean("res")
-		opt.Version = "2011-02-03T04:05:06.000000000Z"
+		opt.Version = "2011-02-03T04-05-06.000000000Z"
 		e.restore()
 		e.checkExistFile("a")
 		e.checkNotExist("b")
 		e.checkNotExist("c")
 		e.clean("res")
-		opt.Version = "2011-02-03T04:09:06.000000000Z"
+		opt.Version = "2011-02-03T04-09-06.000000000Z"
 		e.restore()
 		e.checkExistFile("a")
 		e.checkExistFile("c")
@@ -1300,7 +1318,7 @@ func randomizeFiles(e *TestEnv, nodes []string) {
 			continue
 		}
 		f := fmt.Sprintf("%03d", i)
-		f = path.Join(f[:1], f[1:2], f[2:])
+		f = filepath.Join(f[:1], f[1:2], f[2:])
 		if nodes[i] != "" {
 			e.tryrm(f)
 			e.tryrm(f[:4])
@@ -1516,6 +1534,9 @@ func TestToExclude(t *testing.T) {
 		{[]string{"/*/b"}, "b", "z", false},
 	}
 	for _, c := range cases {
+		for i, p := range c.patterns {
+			c.patterns[i] = filepath.FromSlash(p)
+		}
 		got := toExclude(c.patterns, c.d, c.f)
 		if got != c.want {
 			t.Errorf("toExclude(%v, %v, %v) == %v, want %v", c.patterns, c.d, c.f, got, c.want)

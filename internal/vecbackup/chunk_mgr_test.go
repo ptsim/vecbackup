@@ -3,6 +3,7 @@ package vecbackup
 import (
 	"bytes"
 	"crypto/sha512"
+	"io/ioutil"
 	"math/rand"
 	"testing"
 )
@@ -17,9 +18,13 @@ func TestCMEnc(t *testing.T) {
 }
 
 func testCMhelper(t *testing.T, key *EncKey) {
-	removeAll(t, REPO)
-	defer removeAll(t, REPO)
-	sm, repo2 := GetStorageMgr(REPO)
+	repo, err := ioutil.TempDir("", "chunk_mgr_test-*")
+	if err != nil {
+		t.Fatal("Cannot get tempdir", err)
+	}
+	removeAll(t, repo)
+	defer removeAll(t, repo)
+	sm, repo2 := GetStorageMgr(repo)
 	cm := MakeCMgr(sm, repo2, key, CompressionMode_YES)
 	N := 100000
 	mem := makeAddChunkMem(N)
