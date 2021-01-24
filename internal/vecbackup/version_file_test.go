@@ -39,3 +39,26 @@ func TestVersionFileEnc(t *testing.T) {
 		t.Log(nd)
 	}
 }
+
+func TestVersionTimestamp(t *testing.T) {
+	t1 := time.Now().UTC()
+	v := t1.Format(RFC3339NanoMod)
+	t.Logf("Timestamp: %v Version: %s\n", t1, v)
+	t2, ok := DecodeVersionTime(v)
+	if !ok {
+		t.Fatalf("Failed to decode timestamp: %v", v)
+	}
+	if t1 != t2 {
+		t.Fatalf("Decoded time is not equal: orig %v decoded %v", t1, t2)
+	}
+	t3 := time.Date(2002, time.January, 02, 03, 04, 05, 06, time.UTC)
+	v2 := t3.Format(RFC3339NanoMod)
+	t.Logf("Timestamp: %v Version: %s\n", t3, v2)
+	t4, ok := DecodeVersionTime(v2)
+	if !ok {
+		t.Fatalf("Failed to decode timestamp: %v", v2)
+	}
+	if t3 != t4 {
+		t.Fatalf("Decoded time is not equal: orig %v decoded %v", t3, t4)
+	}
+}

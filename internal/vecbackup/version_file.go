@@ -37,17 +37,17 @@ type FileData struct {
 }
 
 //---------------------------------------------------------------------------
-const RFC3339NanoFull = "2006-01-02T15-04-05.000000000Z07:00"
+const RFC3339NanoMod = "2006-01-02T15-04-05.000000000Z07:00"
 
 func DecodeVersionTime(v string) (time.Time, bool) {
-	t, err := time.Parse(RFC3339NanoFull, v)
+	t, err := time.Parse(RFC3339NanoMod, v)
 	return t, err == nil && t.Location() == time.UTC
 }
 
 func CreateNewVersion(last string) string {
 	for {
-		t := time.Now()
-		new_version := t.UTC().Format(RFC3339NanoFull)
+		t := time.Now().UTC()
+		new_version := t.Format(RFC3339NanoMod)
 		if new_version > last {
 			return new_version
 		}

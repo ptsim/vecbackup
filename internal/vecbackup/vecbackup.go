@@ -834,6 +834,7 @@ func DeleteOldVersions(pwFile, repo string, dryRun bool) error {
 	if err != nil {
 		return fmt.Errorf("Cannot read version files: %s", err)
 	}
+	sort.Strings(versions)
 	d := ReduceVersions(time.Now(), versions)
 	for _, v := range d {
 		stdout.Printf("Deleting version %s\n", v)
