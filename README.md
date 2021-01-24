@@ -7,6 +7,7 @@ Versioned Encrypted Compressed backup.
 * Optionally compresses (zlib)
 * Optionally password protect and encrypt backups with authenticated encryption (PBKDF2+NaCl)
 * MIT license.
+* Supported platforms: MacOS, Linux, Windows 10.
 
 **Disclaimer: Use at your own risk.**
 
@@ -78,7 +79,7 @@ https://github.com/ptsim/vecbackup/releases
 For other systems, try building from source.
 It will likely just work with any Linux distribution.
 
-Not tested on Windows.
+Latest version on the master branch now works on Windows 10.
 
 ## How to build?
 
@@ -102,7 +103,7 @@ You will find the ```vecbackup``` binary in the current directory.
 * Each chunk is checksummed (sha512_256), optionally compressed (zlib) and then optionally encrypted using Golang secretbox (NaCl).
 * Chunks are added and never modified or deleted during the backup operation
 * De-duplication is based on the content checksum of the chunks before compression and encryption.
-* A version manifest file (RFC3339Nano timestamp) lists all the files for a version of the backup.
+* A version manifest file (modified RFC3339Nano timestamp) lists all the files for a version of the backup.
 
 ### Q: How does vecbackup know if files have been modified?
 * vecbackup assumes that a file has not been modified if its file size and modified timestamp have not changed from the last backup.
@@ -188,6 +189,7 @@ You will find the ```vecbackup``` binary in the current directory.
 /a/abc/*
 *~
 ```
+* Note: On Windows, use ```\``` as the path separator. On Linux and MacOS, use ```/```.
 
 ### Q: Just show me the effects of the operations, aka dry run mode?
 * ```vecbackup backup -n ...```
@@ -210,6 +212,11 @@ You will find the ```vecbackup``` binary in the current directory.
 * Keep one version per month otherwise
 * All extra versions are deleted
 * The unused chunk files are not deleted until you run ```vecbackup purge-unused```.
+
+### Q: Are repositories compatible across platforms (Linux/MacOS/Windows)?
+* Yes. You can restore files from a repository that was created on a different platform.
+* Use the path sperator for the current platform when specifying paths and excluded file patterns.
+* Files are backed up and restored verbatim. Files are treated as a bunch of bytes and not interpreted. In particular, no line ending conversion, unicode normalization or any other change is done when backing up or restoring. File names are also recorded as-is.
 
 ### Q: Can this back up directly to the cloud?
 * Yes!
