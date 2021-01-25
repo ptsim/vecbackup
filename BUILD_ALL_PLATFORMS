@@ -1,0 +1,4 @@
+#!/bin/bash
+GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-buildid=" -o vecbackup-darwin-amd64 ./cmd/vecbackup
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-buildid=" -o vecbackup-linux-amd64 ./cmd/vecbackup
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-buildid=" -o vecbackup-windows-amd64.exe ./cmd/vecbackup
