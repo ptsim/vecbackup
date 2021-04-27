@@ -3,7 +3,7 @@
 Versioned Encrypted Compressed backup.
 
 * Backup multiple versions locally or to the cloud or remote destinations using rclone.
-* De-duplicates based on content checksums (sha512_256)
+* De-duplicates chunks based on content checksums (sha512_256)
 * Optionally compresses (zlib)
 * Optionally password protect and encrypt backups with authenticated encryption (PBKDF2+NaCl)
 * MIT license.
