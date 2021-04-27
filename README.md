@@ -238,3 +238,12 @@ You will find the ```vecbackup``` binary in the current directory.
 ### Q: What do you use this for?
 * I use this to backup all my data, mostly consisting of terabytes of irreplaceable photos and videos.
 * I also use this with rclone to store sensitive or working data in cloud storage.
+
+### Q: Maintenance/Future plans?
+* I plan to use and maintain this for a long time.
+* A few potential new features:
+   * Support Zstandard compression
+   * Backup to and restore from a ssh/scp repository (without using rclone)
+   * Local cacheing of data when using a remote repository.
+
+
