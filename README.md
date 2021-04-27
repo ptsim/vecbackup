@@ -47,7 +47,7 @@ To restore the latest backup to ```/a/temp```:
 
 To test the restore of the latest backup without writing the recovered files:
 
-```vecbackup restore -r /b/mybackup -verify-only /whatever```
+```vecbackup restore -r /b/mybackup -verify-only```
 
 To restore a file or dir ```/a/mystuff/path``` from the backup to ```/a/temp```:
 
