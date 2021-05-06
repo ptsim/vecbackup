@@ -210,7 +210,7 @@ You will find the ```vecbackup``` binary in the current directory.
 
 ### Q: Are repositories compatible across platforms (Linux/MacOS/Windows)?
 * Yes. You can restore files from a repository that was created on a different platform.
-* Use the path sperator for the current platform when specifying paths and excluded file patterns.
+* Use the path separator for the current platform when specifying paths and excluded file patterns.
 * Files are backed up and restored verbatim. Files are treated as a bunch of bytes and not interpreted. In particular, no line ending conversion, unicode normalization or any other change is done when backing up or restoring. File names are also recorded as-is.
 
 ### Q: Can this back up directly to the cloud?
